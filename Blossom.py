@@ -4,11 +4,11 @@ import random
 import asyncio
 import os
 from dotenv import load_dotenv
-
+from keep_alive import keep_alive
 # Load the .env file
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
-
+keep_alive()
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="b!", intents=intents)
