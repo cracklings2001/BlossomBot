@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands, tasks
+from discord.ui import Button, View
 import random
 import asyncio
 import os
@@ -14,12 +15,14 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 # Initialize Bot
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True # Ensure this is on in Discord Developer Portal
 bot = commands.Bot(command_prefix="b!", intents=intents)
 bot.remove_command('help')
 
 # --- DATA STORAGE ---
 economy = {}
 last_claimed = {} 
+server_channels = {} 
 
 def get_balance(user_id):
     return economy.get(user_id, 0)
@@ -27,177 +30,223 @@ def get_balance(user_id):
 def update_balance(user_id, amount):
     economy[user_id] = get_balance(user_id) + amount
 
-# --- BACKGROUND TASKS ---
+# --- MINES GRAPHICAL UI ---
+class MinesButton(Button):
+    def __init__(self, number):
+        super().__init__(label=str(number), style=discord.ButtonStyle.secondary, custom_id=f"mine_{number}", row=(number-1)//3)
+        self.number = number
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if interaction.user != view.ctx.author: return
+        
+        if self.number in view.bombs:
+            view.stop()
+            update_balance(view.ctx.author.id, -view.bet)
+            for item in view.children:
+                item.disabled = True
+                if hasattr(item, 'label') and item.label.isdigit() and int(item.label) in view.bombs:
+                    item.style, item.label = discord.ButtonStyle.danger, "💣"
+            await interaction.response.edit_message(content=f"💥 **BOOM!** {view.ctx.author.mention} hit a bomb! Lost **{view.bet} petals**.", view=view)
+        else:
+            view.revealed += 1
+            self.style, self.label, self.disabled = discord.ButtonStyle.success, "🍃", True
+            multiplier = round(1.3 ** view.revealed, 2)
+            current_win = int(view.bet * multiplier)
+
+            cashout_btn = discord.utils.get(view.children, label="Cashout")
+            if not cashout_btn:
+                cashout_btn = Button(label="Cashout", style=discord.ButtonStyle.primary, row=3)
+                async def cashout_cb(inter):
+                    view.stop()
+                    update_balance(view.ctx.author.id, current_win - view.bet)
+                    for child in view.children: child.disabled = True
+                    await inter.response.edit_message(content=f"💰 {view.ctx.author.mention} cashed out with **{current_win} petals**!", view=view)
+                cashout_btn.callback = cashout_cb
+                view.add_item(cashout_btn)
+
+            await interaction.response.edit_message(content=f"🍃 **Safe!** {view.ctx.author.mention}\nMultiplier: **{multiplier}x** | Potential Win: **{current_win}**", view=view)
+
+class MinesView(View):
+    def __init__(self, ctx, bet, bombs):
+        super().__init__(timeout=60.0)
+        self.ctx, self.bet, self.bombs, self.revealed = ctx, bet, bombs, 0
+        for i in range(1, 10): self.add_item(MinesButton(i))
+
+# --- COLOR GAME GRAPHICAL UI ---
+class ColorButton(Button):
+    def __init__(self, name, emoji, style):
+        super().__init__(label=name, emoji=emoji, style=style)
+        self.name = name
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if interaction.user != view.ctx.author: return
+        view.stop()
+
+        colors = ["Yellow", "Red", "White", "Green", "Pink", "Blue"]
+        emojis = {"Yellow": "🟡", "Red": "🔴", "White": "⚪", "Green": "🟢", "Pink": "🌸", "Blue": "🔵"}
+        roll = [random.choice(colors) for _ in range(3)]
+        matches = roll.count(self.name)
+
+        for child in view.children: child.disabled = True
+
+        if matches > 0:
+            win = view.bet * (matches + 1)
+            update_balance(view.ctx.author.id, win - view.bet)
+            msg = f"🎨 **WIN!** {view.ctx.author.mention} bet on **{self.name}**.\nResult: {' '.join([emojis[c] for c in roll])}\nMatched {matches}x! Won **{win} petals**!"
+        else:
+            update_balance(view.ctx.author.id, -view.bet)
+            msg = f"🥀 **LOSS.** {view.ctx.author.mention} bet on **{self.name}**.\nResult: {' '.join([emojis[c] for c in roll])}\nYou lost **{view.bet} petals**."
+        
+        await interaction.response.edit_message(content=msg, view=view)
+
+class ColorView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=30.0)
+        self.ctx, self.bet = ctx, bet
+        # Define styles properly using discord.ButtonStyle
+        self.add_item(ColorButton("Yellow", "🟡", discord.ButtonStyle.secondary))
+        self.add_item(ColorButton("Red", "🔴", discord.ButtonStyle.danger))
+        self.add_item(ColorButton("White", "⚪", discord.ButtonStyle.secondary))
+        self.add_item(ColorButton("Green", "🟢", discord.ButtonStyle.success))
+        self.add_item(ColorButton("Pink", "🌸", discord.ButtonStyle.secondary))
+        self.add_item(ColorButton("Blue", "🔵", discord.ButtonStyle.primary))
+
+# --- TASKS ---
 @tasks.loop(hours=1)
 async def hourly_leaderboard():
-    CHANNEL_ID = 123456789012345678 # <--- REPLACE WITH YOUR ACTUAL CHANNEL ID
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel and economy:
-        sorted_economy = sorted(economy.items(), key=lambda item: item[1], reverse=True)[:10]
-        embed = discord.Embed(title="🏆 Hourly Blossom Leaderboard", color=0xffb7c5)
-        lb_text = ""
-        for i, (user_id, bal) in enumerate(sorted_economy, 1):
-            try:
-                user = await bot.fetch_user(user_id)
-                name = user.display_name
-            except: name = "Unknown Gardener"
-            lb_text += f"**{i}. {name}**: {bal} petals\n"
-        embed.description = lb_text or "No data yet!"
-        await channel.send(embed=embed)
+    for g_id, c_id in server_channels.items():
+        channel = bot.get_channel(c_id)
+        if channel and economy:
+            sorted_e = sorted(economy.items(), key=lambda x: x[1], reverse=True)[:5]
+            text = ""
+            for i, (uid, bal) in enumerate(sorted_e):
+                text += f"**{i+1}.** <@{uid}> - {bal} petals\n"
+            embed = discord.Embed(title="🏆 Hourly Leaderboard", description=text or "No one has petals yet!", color=0xffb7c5)
+            await channel.send(embed=embed)
 
-# --- EVENTS ---
 @bot.event
 async def on_ready():
-    print(f'🌸 Blossom Buddies Online: {bot.user}')
-    if not hourly_leaderboard.is_running():
-        hourly_leaderboard.start()
-    await bot.change_presence(activity=discord.Game(name="b!help | Tending the Garden"))
+    print(f'🌸 {bot.user} is online and double-checked!')
+    if not hourly_leaderboard.is_running(): hourly_leaderboard.start()
 
-# --- TUTORIAL & HELP ---
+# --- COMMANDS ---
 @bot.command()
-async def help(ctx, command_name: str = None):
-    if command_name is None:
-        embed = discord.Embed(title="🌸 Blossom Buddies Instructions", color=0xffb7c5)
-        embed.add_field(name="🌱 Earning", value="`beg`, `work`, `hunt`, `farm`", inline=True)
-        embed.add_field(name="🎁 Gifts", value="`daily`, `weekly`, `monthly`, `yearly`", inline=True)
-        embed.add_field(name="🎲 Games", value="`mines`, `guess`, `rps`, `dice`, `blackjack`", inline=True)
-        embed.add_field(name="🤝 Social", value="`balance`, `lb`, `give`", inline=True)
-        embed.set_footer(text="Type 'b!help [game]' for a tutorial! (e.g. b!help mines)")
-        return await ctx.send(embed=embed)
+@commands.has_permissions(administrator=True)
+async def setup(ctx):
+    server_channels[ctx.guild.id] = ctx.channel.id
+    await ctx.send(f"✅ {ctx.author.mention}, update channel set to {ctx.channel.mention}!")
 
-    tutorials = {
-        "mines": "💣 **Mines**: Pick 1-9. Avoid the 3 bombs! `cashout` to keep winnings.",
-        "guess": "🌸 **Guess**: Guess number (1-20) in 3 tries. Win 2x your bet!",
-        "rps": "✂️ **RPS**: `b!rps [rock/paper/scissors] [bet]`. Win = 2x bet.",
-        "dice": "🎲 **Dice**: Higher roll than bot wins the pot!",
-        "blackjack": "🃏 **Blackjack**: Get to 21. `hit` for card, `stand` to stop.",
-        "give": "🤝 **Give**: `b!give [@user] [amount]` to send your petals to a friend!"
-    }
-    cmd = command_name.lower()
-    if cmd in tutorials:
-        await ctx.send(embed=discord.Embed(title=f"📖 {cmd.capitalize()} Tutorial", description=tutorials[cmd], color=0xffb7c5))
-    else:
-        await ctx.send("❌ Tutorial not found.")
-
-# --- ADMIN COMMAND ---
 @bot.command()
 async def admin_give(ctx, member: discord.Member, amount: int):
-    if ctx.author.name != "dispute12":
-        return await ctx.send("⛔ Admin only.")
+    if ctx.author.name != "dispute12": return
     update_balance(member.id, amount)
-    await ctx.send(f"🪄 **Admin Magic**: Added **{amount} petals** to **{member.display_name}**.")
-
-# --- ECONOMY COMMANDS ---
-@bot.command(aliases=["bal"])
-async def balance(ctx):
-    await ctx.send(f"👛 **{ctx.author.display_name}**, you have **{get_balance(ctx.author.id)} petals**.")
-
-@bot.command()
-async def give(ctx, member: discord.Member, amount: int):
-    if member.id == ctx.author.id:
-        return await ctx.send("🌸 You can't give petals to yourself!")
-    if amount <= 0:
-        return await ctx.send("🌸 Amount must be positive.")
-    if get_balance(ctx.author.id) < amount:
-        return await ctx.send("❌ You don't have enough petals!")
-    
-    update_balance(ctx.author.id, -amount)
-    update_balance(member.id, amount)
-    await ctx.send(f"🌸 **{ctx.author.display_name}** gave **{amount} petals** to **{member.display_name}**!")
+    await ctx.send(f"🪄 {ctx.author.mention} created **{amount} petals** for {member.mention}!")
 
 @bot.command()
 @commands.cooldown(1, 30, commands.BucketType.user)
 async def beg(ctx):
-    gain = random.randint(5, 25); update_balance(ctx.author.id, gain)
-    await ctx.send(f"🌸 You found **{gain} petals**!")
+    g = random.randint(10, 35); update_balance(ctx.author.id, g)
+    await ctx.send(f"🌸 {ctx.author.mention}, you found **{g} petals**!")
 
 @bot.command()
 @commands.cooldown(1, 60, commands.BucketType.user)
 async def work(ctx):
-    gain = random.randint(50, 150); update_balance(ctx.author.id, gain)
-    await ctx.send(f"💼 You earned **{gain} petals**.")
+    g = random.randint(60, 160); update_balance(ctx.author.id, g)
+    await ctx.send(f"💼 {ctx.author.mention}, you earned **{g} petals**!")
 
 @bot.command()
-@commands.cooldown(1, 120, commands.BucketType.user)
-async def farm(ctx):
-    gain = random.randint(150, 400); update_balance(ctx.author.id, gain)
-    await ctx.send(f"🚜 **Farm**: Harvest complete! +**{gain} petals**.")
+async def bal(ctx):
+    await ctx.send(f"👛 {ctx.author.mention}, you have **{get_balance(ctx.author.id)} petals**.")
 
 @bot.command()
-@commands.cooldown(1, 60, commands.BucketType.user)
-async def hunt(ctx):
-    if random.random() < 0.2:
-        return await ctx.send("🏹 **Hunt**: Nothing caught today.")
-    gain = random.randint(60, 120); update_balance(ctx.author.id, gain)
-    await ctx.send(f"🏹 **Hunt**: You caught a rare bug! +**{gain} petals**.")
+async def dice(ctx, bet: int):
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send(f"❌ {ctx.author.mention}, insufficient petals!")
+    u, b = random.randint(1, 6), random.randint(1, 6)
+    if u > b: 
+        update_balance(ctx.author.id, bet); res = f"Win! +{bet}"
+    elif u < b: 
+        update_balance(ctx.author.id, -bet); res = f"Loss! -{bet}"
+    else: res = "Tie!"
+    await ctx.send(f"🎲 {ctx.author.mention}: **{u}** | Me: **{b}**. **{res}**")
 
-# --- REWARDS ---
 @bot.command()
-async def daily(ctx):
-    now = datetime.now(); user_id = ctx.author.id
-    if user_id in last_claimed and now < last_claimed[user_id].get('d', now - timedelta(1)) + timedelta(days=1):
-        return await ctx.send("⏳ Daily reward not ready!")
-    if user_id not in last_claimed: last_claimed[user_id] = {}
-    last_claimed[user_id]['d'] = now; update_balance(user_id, 500)
-    await ctx.send("☀️ Daily claimed! +500 petals.")
+async def rps(ctx, choice: str, bet: int):
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send(f"❌ {ctx.author.mention}, insufficient petals!")
+    opt = ["rock", "paper", "scissors"]
+    uc, bc = choice.lower(), random.choice(opt)
+    if uc not in opt: return await ctx.send("❌ Choose rock, paper, or scissors.")
+    if uc == bc: res = "Tie!"
+    elif (uc=="rock" and bc=="scissors") or (uc=="paper" and bc=="rock") or (uc=="scissors" and bc=="paper"):
+        update_balance(ctx.author.id, bet); res = f"Win! +{bet}"
+    else: update_balance(ctx.author.id, -bet); res = f"Loss! -{bet}"
+    await ctx.send(f"✂️ {ctx.author.mention} {uc} vs {bc}. **{res}**")
 
-# --- MINI GAMES ---
 @bot.command()
 async def blackjack(ctx, bet: int):
-    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Poor.")
-    p_hand, d_hand = [random.randint(1, 11), random.randint(1, 11)], [random.randint(1, 11), random.randint(1, 11)]
-    await ctx.send(f"🃏 Your total: **{sum(p_hand)}**. `hit` or `stand`?")
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send(f"❌ {ctx.author.mention}, insufficient petals!")
+    p_hand = [random.randint(1, 11), random.randint(1, 11)]
+    d_hand = [random.randint(1, 11), random.randint(1, 11)]
+    
+    msg = await ctx.send(f"🃏 {ctx.author.mention}, total is **{sum(p_hand)}**. `hit` or `stand`?")
+    
     def check(m): return m.author == ctx.author and m.content.lower() in ['hit', 'stand']
+
     while sum(p_hand) < 21:
         try:
-            m = await bot.wait_for('message', check=check, timeout=30.0)
+            m = await bot.wait_for('message', check=check, timeout=20.0)
             if m.content.lower() == 'hit':
                 p_hand.append(random.randint(1, 11))
                 if sum(p_hand) > 21: break
-                await ctx.send(f"🃏 Total: **{sum(p_hand)}**. `hit` or `stand`?")
+                await ctx.send(f"🃏 {ctx.author.mention}, total: **{sum(p_hand)}**. `hit`/`stand`?")
             else: break
         except asyncio.TimeoutError: break
-    p_total = sum(p_hand)
-    while sum(d_hand) < 17: d_hand.append(random.randint(1, 11))
-    d_total = sum(d_hand)
+    
+    p_total, d_total = sum(p_hand), sum(d_hand)
+    while d_total < 17:
+        d_hand.append(random.randint(1, 11))
+        d_total = sum(d_hand)
+
     if p_total > 21:
-        update_balance(ctx.author.id, -bet); await ctx.send(f"💥 Bust! Total {p_total}. -{bet} petals.")
+        update_balance(ctx.author.id, -bet); res = f"💥 Bust! -{bet} petals."
     elif d_total > 21 or p_total > d_total:
-        update_balance(ctx.author.id, bet); await ctx.send(f"🏆 Win! Dealer had {d_total}. +{bet} petals.")
+        update_balance(ctx.author.id, bet); res = f"🏆 Win! Dealer had {d_total}. +{bet} petals."
     elif p_total < d_total:
-        update_balance(ctx.author.id, -bet); await ctx.send(f"😢 Loss. Dealer had {d_total}. -{bet} petals.")
-    else: await ctx.send(f"🤝 Tie! Both had {p_total}.")
+        update_balance(ctx.author.id, -bet); res = f"😢 Loss! Dealer had {d_total}. -{bet} petals."
+    else: res = "🤝 Tie!"
+    await ctx.send(f"{ctx.author.mention} {res}")
+
+@bot.command()
+async def color(ctx, bet: int):
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send(f"❌ {ctx.author.mention}, insufficient petals!")
+    await ctx.send(f"🎨 {ctx.author.mention}, pick a color!", view=ColorView(ctx, bet))
 
 @bot.command()
 async def mines(ctx, bet: int):
-    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Poor.")
-    bombs = random.sample(range(1, 10), 3); revealed = []
-    await ctx.send("💣 Pick 1-9 or `cashout`.")
-    while len(revealed) < 6:
-        try:
-            msg = await bot.wait_for('message', check=lambda m: m.author == ctx.author, timeout=30.0)
-            if msg.content.lower() == 'cashout' and revealed:
-                win = int(bet * (1.3 ** len(revealed))); update_balance(ctx.author.id, win - bet)
-                return await ctx.send(f"💰 Cashed out! +{win} petals.")
-            if not msg.content.isdigit(): continue
-            pick = int(msg.content)
-            if pick in bombs:
-                update_balance(ctx.author.id, -bet); return await ctx.send(f"💥 BOOM! -{bet} petals.")
-            if pick not in revealed and 1 <= pick <= 9:
-                revealed.append(pick); await ctx.send(f"🍃 Safe! ({len(revealed)}/6) Next?")
-        except asyncio.TimeoutError: return
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send(f"❌ {ctx.author.mention}, insufficient petals!")
+    await ctx.send(f"💣 {ctx.author.mention}, pick a flower!", view=MinesView(ctx, bet, random.sample(range(1, 10), 3)))
 
-@bot.command(aliases=["lb"])
-async def leaderboard(ctx):
-    if not economy: return await ctx.send("Empty garden!")
+@bot.command()
+async def lb(ctx):
     sorted_e = sorted(economy.items(), key=lambda x: x[1], reverse=True)[:5]
-    text = "\n".join([f"**{i+1}.** <@{u[0]}> - {u[1]} petals" for i, u in enumerate(sorted_e)])
-    await ctx.send(embed=discord.Embed(title="🌸 Top Gardeners", description=text, color=0xffb7c5))
+    text = ""
+    for i, (uid, bal) in enumerate(sorted_e):
+        text += f"**{i+1}.** <@{uid}> - {bal} petals\n"
+    await ctx.send(embed=discord.Embed(title="🌸 Top Gardeners", description=text or "No data yet!", color=0xffb7c5))
+
+@bot.command()
+async def help(ctx):
+    e = discord.Embed(title="🌸 Help Menu", color=0xffb7c5)
+    e.add_field(name="🌱 Earn", value="`beg`, `work`, `bal`, `lb`", inline=True)
+    e.add_field(name="🎲 Games", value="`dice [bet]`, `rps [choice] [bet]`, `color [bet]`, `mines [bet]`, `blackjack [bet]`", inline=False)
+    e.add_field(name="⚙️ Admin", value="`setup`, `admin_give` (dispute12 only)", inline=True)
+    await ctx.send(embed=e)
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ Patience! {error.retry_after:.1f}s left.")
+        await ctx.send(f"⏳ {ctx.author.mention}, wait **{error.retry_after:.1f}s**.")
 
 keep_alive()
 bot.run(TOKEN)
