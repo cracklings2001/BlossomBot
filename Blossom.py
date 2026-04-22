@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 from keep_alive import keep_alive
 import math
+from datetime import datetime, timedelta
 
 # --- BOT CONFIGURATION ---
 load_dotenv()
@@ -29,11 +30,44 @@ daily_cooldown = {}
 weekly_cooldown = {}
 hourly_cooldown = {}
 
+# --- NEW COOLDOWN DICTIONARIES FOR FARM/BEG/HUNT/WORK ---
+beg_cooldown = {}
+farm_cooldown = {}
+hunt_cooldown = {}
+work_cooldown = {}
+
 def get_balance(user_id):
     return economy.get(user_id, 0)
 
 def update_balance(user_id, amount):
     economy[user_id] = get_balance(user_id) + amount
+
+def check_cooldown(cooldown_dict, user_id, cooldown_seconds=86400):  # 24 hours default
+    """Check if user is on cooldown, returns (is_on_cooldown, remaining_time)"""
+    if user_id in cooldown_dict:
+        last_used = cooldown_dict[user_id]
+        time_passed = (datetime.now() - last_used).total_seconds()
+        if time_passed < cooldown_seconds:
+            remaining = cooldown_seconds - time_passed
+            return True, remaining
+    return False, 0
+
+def set_cooldown(cooldown_dict, user_id):
+    """Set cooldown for user"""
+    cooldown_dict[user_id] = datetime.now()
+
+def format_time(seconds):
+    """Format seconds into readable time"""
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    seconds = int(seconds % 60)
+    
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    elif minutes > 0:
+        return f"{minutes}m {seconds}s"
+    else:
+        return f"{seconds}s"
 
 # --- UI: REDEEM MODAL ---
 class RedeemModal(Modal, title="🌸 Redeem Petals - Enter Your Code"):
@@ -902,11 +936,12 @@ async def on_ready():
 @bot.command()
 async def daily(ctx):
     user_id = ctx.author.id
-    now = asyncio.get_event_loop().time()
+    now = datetime.now()
     
     if user_id in daily_cooldown:
-        remaining = 86400 - (now - daily_cooldown[user_id])
-        if remaining > 0:
+        time_passed = (now - daily_cooldown[user_id]).total_seconds()
+        if time_passed < 86400:
+            remaining = 86400 - time_passed
             hours = int(remaining // 3600)
             minutes = int((remaining % 3600) // 60)
             return await ctx.send(f"⏰ You already claimed your daily reward! Come back in {hours}h {minutes}m!")
@@ -925,11 +960,12 @@ async def daily(ctx):
 @bot.command()
 async def weekly(ctx):
     user_id = ctx.author.id
-    now = asyncio.get_event_loop().time()
+    now = datetime.now()
     
     if user_id in weekly_cooldown:
-        remaining = 604800 - (now - weekly_cooldown[user_id])
-        if remaining > 0:
+        time_passed = (now - weekly_cooldown[user_id]).total_seconds()
+        if time_passed < 604800:
+            remaining = 604800 - time_passed
             days = int(remaining // 86400)
             hours = int((remaining % 86400) // 3600)
             return await ctx.send(f"⏰ You already claimed your weekly reward! Come back in {days}d {hours}h!")
@@ -948,11 +984,12 @@ async def weekly(ctx):
 @bot.command()
 async def hourly(ctx):
     user_id = ctx.author.id
-    now = asyncio.get_event_loop().time()
+    now = datetime.now()
     
     if user_id in hourly_cooldown:
-        remaining = 3600 - (now - hourly_cooldown[user_id])
-        if remaining > 0:
+        time_passed = (now - hourly_cooldown[user_id]).total_seconds()
+        if time_passed < 3600:
+            remaining = 3600 - time_passed
             minutes = int(remaining // 60)
             return await ctx.send(f"⏰ You already claimed your hourly reward! Come back in {minutes}m!")
     
@@ -965,6 +1002,155 @@ async def hourly(ctx):
         description=f"{ctx.author.mention} received **{reward} petals**!",
         color=0x00ff00
     )
+    await ctx.send(embed=embed)
+
+# --- FARM, BEG, HUNT, WORK COMMANDS WITH DAILY COOLDOWN ---
+@bot.command()
+async def beg(ctx):
+    user_id = ctx.author.id
+    
+    # Check cooldown
+    on_cooldown, remaining = check_cooldown(beg_cooldown, user_id)
+    if on_cooldown:
+        time_str = format_time(remaining)
+        embed = discord.Embed(
+            title="⏰ Too Soon!",
+            description=f"You already begged today! Come back in **{time_str}**",
+            color=0xff0000
+        )
+        embed.set_footer(text="You can only beg once per day!")
+        return await ctx.send(embed=embed)
+    
+    # Give reward
+    reward = random.randint(50, 150)
+    update_balance(user_id, reward)
+    set_cooldown(beg_cooldown, user_id)
+    
+    beg_responses = [
+        f"🌸 A kind stranger gave you **{reward} petals**!",
+        f"💐 You found **{reward} petals** on the ground!",
+        f"🌺 Someone dropped **{reward} petals** - finders keepers!",
+        f"🌻 A fairy blessed you with **{reward} petals**!",
+        f"🎭 A mysterious benefactor donated **{reward} petals** to you!"
+    ]
+    
+    embed = discord.Embed(
+        title="🌸 Begging Successful! 🌸",
+        description=random.choice(beg_responses),
+        color=0x00ff88
+    )
+    embed.set_footer(text="Come back tomorrow for more petals!")
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def farm(ctx):
+    user_id = ctx.author.id
+    
+    # Check cooldown
+    on_cooldown, remaining = check_cooldown(farm_cooldown, user_id)
+    if on_cooldown:
+        time_str = format_time(remaining)
+        embed = discord.Embed(
+            title="⏰ Too Soon!",
+            description=f"Your crops are still growing! Come back in **{time_str}**",
+            color=0xff0000
+        )
+        embed.set_footer(text="You can only farm once per day!")
+        return await ctx.send(embed=embed)
+    
+    # Give reward
+    reward = random.randint(200, 450)
+    update_balance(user_id, reward)
+    set_cooldown(farm_cooldown, user_id)
+    
+    farm_responses = [
+        f"🚜 You harvested a bountiful crop of **{reward} petals**!",
+        f"🌾 Your fields yielded **{reward} petals** today!",
+        f"🍎 The apple trees gave you **{reward} petals**!",
+        f"🌽 The corn harvest brought **{reward} petals**!",
+        f"🍓 Your strawberry patch produced **{reward} petals**!"
+    ]
+    
+    embed = discord.Embed(
+        title="🚜 Harvest Time! 🚜",
+        description=random.choice(farm_responses),
+        color=0x8B4513
+    )
+    embed.set_footer(text="Your crops will grow back tomorrow!")
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def hunt(ctx):
+    user_id = ctx.author.id
+    
+    # Check cooldown
+    on_cooldown, remaining = check_cooldown(hunt_cooldown, user_id)
+    if on_cooldown:
+        time_str = format_time(remaining)
+        embed = discord.Embed(
+            title="⏰ Too Soon!",
+            description=f"The forest needs time to replenish! Come back in **{time_str}**",
+            color=0xff0000
+        )
+        embed.set_footer(text="You can only hunt once per day!")
+        return await ctx.send(embed=embed)
+    
+    # Give reward
+    reward = random.randint(100, 300)
+    update_balance(user_id, reward)
+    set_cooldown(hunt_cooldown, user_id)
+    
+    hunt_responses = [
+        f"🏹 You tracked down a deer and found **{reward} petals**!",
+        f"🐗 Your hunting expedition brought **{reward} petals**!",
+        f"🦌 You discovered a hidden stash worth **{reward} petals**!",
+        f"🐇 Your traps caught enough for **{reward} petals**!",
+        f"🦊 You found a treasure while hunting: **{reward} petals**!"
+    ]
+    
+    embed = discord.Embed(
+        title="🏹 Hunting Expedition! 🏹",
+        description=random.choice(hunt_responses),
+        color=0x228B22
+    )
+    embed.set_footer(text="The animals will return tomorrow!")
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def work(ctx):
+    user_id = ctx.author.id
+    
+    # Check cooldown
+    on_cooldown, remaining = check_cooldown(work_cooldown, user_id)
+    if on_cooldown:
+        time_str = format_time(remaining)
+        embed = discord.Embed(
+            title="⏰ Too Soon!",
+            description=f"You're tired from work! Come back in **{time_str}**",
+            color=0xff0000
+        )
+        embed.set_footer(text="You can only work once per day!")
+        return await ctx.send(embed=embed)
+    
+    # Give reward
+    reward = random.randint(150, 350)
+    update_balance(user_id, reward)
+    set_cooldown(work_cooldown, user_id)
+    
+    work_responses = [
+        f"💼 You completed your daily shift and earned **{reward} petals**!",
+        f"🏢 Your boss gave you a bonus of **{reward} petals**!",
+        f"📊 You finished all your tasks and received **{reward} petals**!",
+        f"🎯 Your hard work paid off with **{reward} petals**!",
+        f"⭐ You got employee of the day and won **{reward} petals**!"
+    ]
+    
+    embed = discord.Embed(
+        title="💼 Work Complete! 💼",
+        description=random.choice(work_responses),
+        color=0x4169E1
+    )
+    embed.set_footer(text="Come back tomorrow for another day of work!")
     await ctx.send(embed=embed)
 
 # --- ADMIN COMMANDS ---
@@ -999,6 +1185,73 @@ async def give(ctx, member: discord.Member, amount: int):
     embed = discord.Embed(title="✅ Petals Given!", description=f"Gave **{amount} petals** to {member.mention}", color=0x00ff00)
     await ctx.send(embed=embed)
 
+# --- RESET COOLDOWNS COMMAND (Admin Only) ---
+@bot.command()
+async def reset_cooldowns(ctx, user: discord.Member = None):
+    """Reset cooldowns for a user (Admin only)"""
+    if ctx.author.name not in ADMINS:
+        return await ctx.send("❌ You don't have permission to use this command!")
+    
+    target = user if user else ctx.author
+    
+    if target.id in beg_cooldown:
+        del beg_cooldown[target.id]
+    if target.id in farm_cooldown:
+        del farm_cooldown[target.id]
+    if target.id in hunt_cooldown:
+        del hunt_cooldown[target.id]
+    if target.id in work_cooldown:
+        del work_cooldown[target.id]
+    
+    embed = discord.Embed(
+        title="✅ Cooldowns Reset!",
+        description=f"Reset all daily command cooldowns for {target.mention}",
+        color=0x00ff00
+    )
+    await ctx.send(embed=embed)
+
+# --- COOLDOWN STATUS COMMAND ---
+@bot.command()
+async def cooldowns(ctx):
+    """Check your cooldown status for daily commands"""
+    user_id = ctx.author.id
+    
+    embed = discord.Embed(
+        title="⏰ Your Daily Command Status",
+        description="Here's when you can use your daily commands again:",
+        color=0xffb7c5
+    )
+    
+    # Check beg cooldown
+    on_cooldown, remaining = check_cooldown(beg_cooldown, user_id)
+    if on_cooldown:
+        embed.add_field(name="🌸 Beg", value=f"Available in: {format_time(remaining)}", inline=False)
+    else:
+        embed.add_field(name="🌸 Beg", value="✅ Available now!", inline=False)
+    
+    # Check farm cooldown
+    on_cooldown, remaining = check_cooldown(farm_cooldown, user_id)
+    if on_cooldown:
+        embed.add_field(name="🚜 Farm", value=f"Available in: {format_time(remaining)}", inline=False)
+    else:
+        embed.add_field(name="🚜 Farm", value="✅ Available now!", inline=False)
+    
+    # Check hunt cooldown
+    on_cooldown, remaining = check_cooldown(hunt_cooldown, user_id)
+    if on_cooldown:
+        embed.add_field(name="🏹 Hunt", value=f"Available in: {format_time(remaining)}", inline=False)
+    else:
+        embed.add_field(name="🏹 Hunt", value="✅ Available now!", inline=False)
+    
+    # Check work cooldown
+    on_cooldown, remaining = check_cooldown(work_cooldown, user_id)
+    if on_cooldown:
+        embed.add_field(name="💼 Work", value=f"Available in: {format_time(remaining)}", inline=False)
+    else:
+        embed.add_field(name="💼 Work", value="✅ Available now!", inline=False)
+    
+    await ctx.send(embed=embed)
+
 # --- USER COMMANDS ---
 @bot.command()
 async def lb(ctx):
@@ -1013,27 +1266,6 @@ async def lb(ctx):
         leaderboard_text += f"{medal} **{i}.** <@{user_id}> — `{petals}` petals\n"
     
     embed = discord.Embed(title="🌸 Global Leaderboard", description=leaderboard_text, color=0xffb7c5)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def beg(ctx):
-    g = random.randint(10, 50)
-    update_balance(ctx.author.id, g)
-    embed = discord.Embed(title="🌸 Begging Successful!", description=f"{ctx.author.mention} found **{g} petals**!", color=0x00ff88)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def farm(ctx):
-    g = random.randint(200, 450)
-    update_balance(ctx.author.id, g)
-    embed = discord.Embed(title="🚜 Harvest Time!", description=f"{ctx.author.mention} harvested **{g} petals**!", color=0x8B4513)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def hunt(ctx):
-    g = random.randint(100, 300)
-    update_balance(ctx.author.id, g)
-    embed = discord.Embed(title="🏹 Hunting Expedition!", description=f"{ctx.author.mention} got **{g} petals**!", color=0x228B22)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -1249,10 +1481,11 @@ async def redeem(ctx):
 async def help(ctx):
     embed = discord.Embed(title="🌸 Blossom Garden - Help Menu", description="Here's everything you can do:", color=0xffb7c5)
     
-    embed.add_field(name="🌱 **Earning**", value="`beg`, `farm`, `hunt`, `daily`, `weekly`, `hourly`, `bal`, `lb`, `redeem`", inline=False)
-    embed.add_field(name="🎲 **Games**", value="`crash`, `mines`, `color`, `blackjack`, `dice`, `rps`, `slots`, `coinflip`, `higherlower`, `roulette`, `tower`, `scratch`, `treasure`, `roulettegun`, `race`, `poker`", inline=False)
-    embed.add_field(name="🎟️ **Admin**", value="`gen`, `setup`, `give`, `add_admin`, `remove_admin`, `admins`", inline=False)
-    embed.set_footer(text="🌸 16+ Exciting Games! 🌸")
+    embed.add_field(name="🌱 **Daily Earnings**", value="`beg`, `farm`, `hunt`, `work` - Each once per day!\n`daily`, `weekly`, `hourly` - Time-based rewards!", inline=False)
+    embed.add_field(name="🎲 **Casino Games**", value="`crash`, `mines`, `color`, `blackjack`, `dice`, `rps`, `slots`, `coinflip`, `higherlower`, `roulette`, `tower`, `scratch`, `treasure`, `roulettegun`, `race`, `poker`", inline=False)
+    embed.add_field(name="ℹ️ **Info**", value="`bal` - Check balance\n`lb` - Leaderboard\n`cooldowns` - Check daily command status", inline=False)
+    embed.add_field(name="🎟️ **Admin**", value="`gen`, `setup`, `give`, `reset_cooldowns`", inline=False)
+    embed.set_footer(text="🌸 16+ Exciting Games! Daily commands reset every 24 hours! 🌸")
     await ctx.send(embed=embed)
 
 # --- ADMIN MANAGEMENT ---
