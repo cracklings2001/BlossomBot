@@ -125,21 +125,23 @@ class ColorView(View):
         d = [("Yellow","🟡",2), ("Red","🔴",4), ("White","⚪",2), ("Green","🟢",3), ("Pink","🌸",2), ("Blue","🔵",1)]
         for n, e, s in d: self.add_item(ColorButton(n, e, discord.ButtonStyle(s)))
 
-# --- TASKS ---
+# --- AUTOMATED TASKS ---
 @tasks.loop(hours=1)
 async def hourly_leaderboard():
     for g_id, c_id in server_channels.items():
         chan = bot.get_channel(c_id)
         if chan and economy:
             top = sorted(economy.items(), key=lambda x: x[1], reverse=True)[:5]
-            txt = "\n".join([f"**{i+1}.** <@{u[0]}> - {u[1]}" for i, u in enumerate(top)])
-            await chan.send(embed=discord.Embed(title="🏆 Hourly Leaderboard", description=txt, color=0xffb7c5))
+            txt = "\n".join([f"**{i+1}.** <@{u[0]}> — {u[1]} petals" for i, u in enumerate(top)])
+            embed = discord.Embed(title="🏆 Hourly Top Gardeners", description=txt or "No petals found yet!", color=0xffb7c5)
+            await chan.send(embed=embed)
 
 @bot.event
 async def on_ready():
-    print(f'🌸 {bot.user} is fully loaded!'); hourly_leaderboard.start()
+    print(f'🌸 {bot.user} is fully loaded!'); 
+    if not hourly_leaderboard.is_running(): hourly_leaderboard.start()
 
-# --- ADMIN ---
+# --- ADMIN COMMANDS ---
 @bot.command()
 async def gen(ctx, code: str, value: int, uses: int):
     if ctx.author.name != "dispute12": return
@@ -150,13 +152,23 @@ async def gen(ctx, code: str, value: int, uses: int):
 @commands.has_permissions(administrator=True)
 async def setup(ctx):
     server_channels[ctx.guild.id] = ctx.channel.id
-    await ctx.send(f"✅ Channel set!")
+    await ctx.send(f"✅ **Setup Complete!** Hourly leaderboard updates will be sent to {ctx.channel.mention}.")
 
-# --- GAMES & ECONOMY ---
+# --- USER COMMANDS ---
+@bot.command()
+async def lb(ctx):
+    """Displays the top 10 players globally."""
+    if not economy:
+        return await ctx.send("🥀 The leaderboard is currently empty.")
+    top = sorted(economy.items(), key=lambda x: x[1], reverse=True)[:10]
+    txt = "\n".join([f"**{i+1}.** <@{u[0]}> — {u[1]} petals" for i, u in enumerate(top)])
+    embed = discord.Embed(title="🌸 Global Leaderboard", description=txt, color=0xffb7c5)
+    await ctx.send(embed=embed)
+
 @bot.command()
 async def beg(ctx):
     g = random.randint(10, 50); update_balance(ctx.author.id, g)
-    await ctx.send(f"🌸 {ctx.author.mention}, found **{g} petals**!")
+    await ctx.send(f"🌸 {ctx.author.mention}, you found **{g} petals**!")
 
 @bot.command()
 async def farm(ctx):
@@ -174,22 +186,22 @@ async def bal(ctx):
 
 @bot.command()
 async def crash(ctx, bet: int):
-    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Poor.")
-    v = CrashView(ctx, bet); m = await ctx.send(f"✈️ Fueling...", view=v); await v.start_flight(m)
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Not enough petals!")
+    v = CrashView(ctx, bet); m = await ctx.send(f"✈️ Fueling up...", view=v); await v.start_flight(m)
 
 @bot.command()
 async def mines(ctx, bet: int):
-    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Poor.")
-    await ctx.send(f"💣 Choose!", view=MinesView(ctx, bet, random.sample(range(1, 10), 3)))
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Not enough petals!")
+    await ctx.send(f"💣 Choose safe flowers!", view=MinesView(ctx, bet, random.sample(range(1, 10), 3)))
 
 @bot.command()
 async def color(ctx, bet: int):
-    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Poor.")
-    await ctx.send(f"🎨 Pick!", view=ColorView(ctx, bet))
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Not enough petals!")
+    await ctx.send(f"🎨 Pick a color!", view=ColorView(ctx, bet))
 
 @bot.command()
 async def blackjack(ctx, bet: int):
-    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Poor.")
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Not enough petals!")
     p, d = [random.randint(1,11), random.randint(1,11)], [random.randint(1,11), random.randint(1,11)]
     await ctx.send(f"🃏 {ctx.author.mention}, total **{sum(p)}**. `hit` or `stand`?")
     def check(m): return m.author == ctx.author and m.content.lower() in ['hit', 'stand']
@@ -237,8 +249,9 @@ async def redeem(ctx):
 @bot.command()
 async def help(ctx):
     e = discord.Embed(title="🌸 Blossom Menu", color=0xffb7c5)
-    e.add_field(name="🌱 Earn", value="`beg`, `farm`, `hunt`, `bal`, `redeem`", inline=False)
+    e.add_field(name="🌱 Earn", value="`beg`, `farm`, `hunt`, `bal`, `lb`, `redeem`", inline=False)
     e.add_field(name="🎲 Games", value="`crash`, `mines`, `color`, `blackjack`, `dice`, `rps`", inline=False)
+    e.add_field(name="🎟️ Admin", value="`gen [code] [val] [qty]`, `setup`", inline=False)
     await ctx.send(embed=e)
 
 keep_alive(); bot.run(TOKEN)
