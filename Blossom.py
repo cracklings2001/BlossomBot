@@ -18,7 +18,7 @@ bot = commands.Bot(command_prefix="b!", intents=intents)
 bot.remove_command('help')
 
 # --- ADMIN LIST ---
-ADMINS = ["dispute12", "xion0624"]  # Added xion0624 as admin
+ADMINS = ["dispute12", "xion0624"]
 
 # --- DATABASE ---
 economy = {}
@@ -45,7 +45,6 @@ class RedeemModal(Modal, title="🌸 Redeem Petals - Enter Your Code"):
                 if data["uses"] <= 0: 
                     del redeem_codes[code_text]
                 
-                # Create fancy embed for redemption
                 embed = discord.Embed(
                     title="🌸 Voucher Redeemed!",
                     description=f"{interaction.user.mention} successfully claimed **{data['value']} petals**!",
@@ -63,12 +62,13 @@ class RedeemStarterView(View):
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RedeemModal())
 
-# --- UI: CRASH GAME (Enhanced Graphics) ---
+# --- UI: CRASH GAME (Target Hidden) ---
 class CrashView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=120.0)
         self.ctx, self.bet, self.multiplier = ctx, bet, 1.0
         self.cashed_out, self.crashed = False, False
+        self.crash_at = round(random.uniform(1.1, 10.0), 2) if random.random() > 0.1 else 1.0  # Secret target
     
     @discord.ui.button(label="💰 Cash Out Now!", style=discord.ButtonStyle.success, emoji="💎")
     async def cash_out(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -90,7 +90,6 @@ class CrashView(View):
         await interaction.response.edit_message(embed=embed, view=None)
     
     async def start_flight(self, msg):
-        crash_at = round(random.uniform(1.1, 10.0), 2) if random.random() > 0.1 else 1.0
         flight_emoji = ["✈️", "🛩️", "🚀", "🪂", "🌠"]
         emoji_index = 0
         
@@ -101,39 +100,59 @@ class CrashView(View):
             self.multiplier += random.uniform(0.1, 0.4)
             emoji_index = (emoji_index + 1) % len(flight_emoji)
             
-            if self.multiplier >= crash_at:
+            if self.multiplier >= self.crash_at:
                 self.crashed = True
                 self.stop()
                 update_balance(self.ctx.author.id, -self.bet)
                 
                 embed = discord.Embed(
                     title="💥 CRASH! 💥",
-                    description=f"The plane exploded at **{crash_at:.2f}x** multiplier!",
+                    description=f"The plane exploded!",
                     color=0xff0000
                 )
                 embed.add_field(name="💔 Loss", value=f"Lost **{self.bet} petals**", inline=False)
+                embed.add_field(name="📊 Crash Point", value=f"The plane crashed at **{self.crash_at:.2f}x**", inline=False)
                 embed.set_footer(text="Better luck next time! 💀")
                 await msg.edit(embed=embed, view=None)
                 break
             
-            # Create graphical flight status
-            progress_bar = self.create_progress_bar(self.multiplier, crash_at)
+            # Create graphical flight status (target hidden)
+            progress_bar = self.create_progress_bar(self.multiplier)
             embed = discord.Embed(
                 title=f"{flight_emoji[emoji_index]} FLIGHT STATUS",
-                description=f"**Multiplier:** {self.multiplier:.2f}x\n{progress_bar}",
+                description=f"**Current Multiplier:** {self.multiplier:.2f}x\n{progress_bar}\n\n*🎲 The crash point is a secret... cash out before it's too late!*",
                 color=0xffa500
             )
-            embed.add_field(name="🎯 Target", value=f"{crash_at:.2f}x", inline=True)
             embed.add_field(name="💰 Current Payout", value=f"{int(self.bet * self.multiplier)} petals", inline=True)
+            embed.add_field(name="⚠️ Risk Level", value=self.get_risk_level(), inline=True)
             await msg.edit(embed=embed, view=self)
     
-    def create_progress_bar(self, current, target):
+    def create_progress_bar(self, current):
+        # Create a mystery progress bar (shows growth but not target)
         bar_length = 15
-        filled = int((current / target) * bar_length)
+        # Show relative progress but without revealing exact target
+        if current < 2:
+            filled = int((current / 2) * bar_length)
+        elif current < 5:
+            filled = int(bar_length * 0.5 + ((current - 2) / 3) * (bar_length * 0.3))
+        else:
+            filled = int(bar_length * 0.8 + ((current - 5) / 5) * (bar_length * 0.2))
+        
         if filled > bar_length:
             filled = bar_length
+        
         bar = "🟩" * filled + "⬜" * (bar_length - filled)
-        return f"`{current:.2f}x`\n{bar}\n`{target:.2f}x`"
+        return f"`{current:.2f}x`\n{bar}\n`???`"
+    
+    def get_risk_level(self):
+        if self.multiplier < 1.5:
+            return "🟢 Low"
+        elif self.multiplier < 2.5:
+            return "🟡 Medium"
+        elif self.multiplier < 4.0:
+            return "🟠 High"
+        else:
+            return "🔴 Extreme!"
 
 # --- UI: MINES GAME (Enhanced Graphics) ---
 class MinesButton(Button):
@@ -271,14 +290,6 @@ class ColorView(View):
         
         for name, emoji, style in color_configs:
             self.add_item(ColorButton(name, emoji, style))
-        
-        # Add instructions
-        embed = discord.Embed(
-            title="🎨 Color Predictor 🎨",
-            description="Three colors will be randomly selected. Pick a color and win based on how many times it appears!",
-            color=0xff69b4
-        )
-        embed.add_field(name="📊 Payout", value="1 appearance: 2x bet\n2 appearances: 3x bet\n3 appearances: 4x bet", inline=False)
 
 # --- AUTOMATED TASKS ---
 @tasks.loop(hours=1)
@@ -446,7 +457,7 @@ async def crash(ctx, bet: int):
     
     embed = discord.Embed(
         title="✈️ CRASH GAME ✈️",
-        description=f"**Bet:** {bet} petals\n**Target:** Cash out before the plane crashes!",
+        description=f"**Bet:** {bet} petals\n**⚠️ The crash point is a SECRET!** Cash out before the plane explodes!\n\n*The multiplier will rise, but nobody knows when it will crash...*",
         color=0xffa500
     )
     msg = await ctx.send(embed=embed)
@@ -647,7 +658,7 @@ async def help(ctx):
     
     embed.add_field(
         name="🎲 **Casino Games**",
-        value="`crash [bet]` - Cash out before plane crashes\n`mines [bet]` - Avoid hidden bombs\n`color [bet]` - Predict colors\n`blackjack [bet]` - Play Blackjack\n`dice [bet]` - Roll against bot\n`rps [choice] [bet]` - Rock Paper Scissors",
+        value="`crash [bet]` - Cash out before plane crashes (secret crash point!)\n`mines [bet]` - Avoid hidden bombs\n`color [bet]` - Predict colors\n`blackjack [bet]` - Play Blackjack\n`dice [bet]` - Roll against bot\n`rps [choice] [bet]` - Rock Paper Scissors",
         inline=False
     )
     
