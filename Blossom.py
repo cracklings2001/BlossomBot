@@ -17,10 +17,9 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="b!", intents=intents)
 bot.remove_command('help')
 
-# --- DATA STORAGE (In-Memory) ---
-# Note: Restarts will clear this. Use a JSON file for permanent storage.
+# --- DATA STORAGE ---
 economy = {}
-last_claimed = {} # {user_id: {reward_type: timestamp}}
+last_claimed = {} 
 
 def get_balance(user_id):
     return economy.get(user_id, 0)
@@ -31,46 +30,55 @@ def update_balance(user_id, amount):
 # --- BACKGROUND TASKS ---
 @tasks.loop(hours=1)
 async def hourly_leaderboard():
-    CHANNEL_ID = 123456789012345678  # <--- REPLACE WITH YOUR CHANNEL ID
+    CHANNEL_ID = 123456789012345678 # <--- CHANGE THIS TO YOUR CHANNEL ID
     channel = bot.get_channel(CHANNEL_ID)
-    
     if channel and economy:
-        sorted_economy = sorted(economy.items(), key=lambda item: item[1], reverse=True)
-        top_10 = sorted_economy[:10]
-
+        sorted_economy = sorted(economy.items(), key=lambda item: item[1], reverse=True)[:10]
         embed = discord.Embed(title="🏆 Hourly Blossom Leaderboard", color=0xffb7c5)
         lb_text = ""
-        for i, (user_id, bal) in enumerate(top_10, 1):
+        for i, (user_id, bal) in enumerate(sorted_economy, 1):
             try:
                 user = await bot.fetch_user(user_id)
                 name = user.display_name
-            except:
-                name = "Unknown"
+            except: name = "Unknown"
             lb_text += f"**{i}. {name}**: {bal} petals\n"
-        
-        embed.add_field(name="Top Players", value=lb_text or "No data yet!")
+        embed.description = lb_text or "No one has petals yet!"
         await channel.send(embed=embed)
 
 # --- EVENTS ---
 @bot.event
 async def on_ready():
-    print(f'🌸 Blossom Buddies is online as {bot.user}')
+    print(f'🌸 Blossom Buddies Online: {bot.user}')
     if not hourly_leaderboard.is_running():
         hourly_leaderboard.start()
     await bot.change_presence(activity=discord.Game(name="b!help | Tending the Garden"))
 
-# --- HELP COMMAND ---
+# --- TUTORIAL & HELP ---
 @bot.command()
-async def help(ctx):
-    embed = discord.Embed(title="🌸 Blossom Buddies Menu", color=0xffb7c5)
-    embed.add_field(name="🌱 Earn", value="`b!beg`, `b!work`, `b!hunt`, `b!farm`", inline=True)
-    embed.add_field(name="🎁 Rewards", value="`b!daily`, `b!weekly`, `b!monthly`, `b!yearly`", inline=True)
-    embed.add_field(name="🎲 Games", value="`b!rps`, `b!dice`, `b!blackjack`", inline=True)
-    embed.add_field(name="🤝 Social", value="`b!give [user] [amount]`, `b!lb`", inline=True)
-    embed.add_field(name="💰 Stats", value="`b!balance`", inline=True)
-    await ctx.send(embed=embed)
+async def help(ctx, command_name: str = None):
+    if command_name is None:
+        embed = discord.Embed(title="🌸 Blossom Buddies Instructions", color=0xffb7c5)
+        embed.add_field(name="🌱 Earning", value="`beg`, `work`, `hunt`, `farm`", inline=True)
+        embed.add_field(name="🎁 Gifts", value="`daily`, `weekly`, `monthly`, `yearly`", inline=True)
+        embed.add_field(name="🎲 Games", value="`mines`, `guess`, `rps`, `dice`, `blackjack`", inline=True)
+        embed.add_field(name="💰 Stats", value="`balance`, `lb`, `give`", inline=True)
+        embed.set_footer(text="Type 'b!help [game]' for a tutorial! (e.g. b!help mines)")
+        return await ctx.send(embed=embed)
 
-# --- ECONOMY COMMANDS ---
+    tutorials = {
+        "mines": "💣 **Mines**: Pick numbers 1-9. Don't hit the 3 bombs! Type `cashout` after any safe pick to keep winnings.",
+        "guess": "🌸 **Guess**: Guess a flower number (1-20) in 3 tries. Win 2x your bet!",
+        "rps": "✂️ **RPS**: `b!rps [rock/paper/scissors] [bet]`. Win doubles your bet.",
+        "dice": "🎲 **Dice**: Higher roll than the bot wins the petals!",
+        "blackjack": "🃏 **Blackjack**: Get close to 21. Type `hit` for card, `stand` to stop."
+    }
+    cmd = command_name.lower()
+    if cmd in tutorials:
+        await ctx.send(embed=discord.Embed(title=f"📖 {cmd.capitalize()} Tutorial", description=tutorials[cmd], color=0xffb7c5))
+    else:
+        await ctx.send("❌ Tutorial not found.")
+
+# --- ECONOMY & REWARDS ---
 @bot.command(aliases=["bal"])
 async def balance(ctx):
     await ctx.send(f"👛 **{ctx.author.display_name}**, you have **{get_balance(ctx.author.id)} petals**.")
@@ -78,114 +86,80 @@ async def balance(ctx):
 @bot.command()
 @commands.cooldown(1, 30, commands.BucketType.user)
 async def beg(ctx):
-    gain = random.randint(5, 25)
-    update_balance(ctx.author.id, gain)
-    await ctx.send(f"🌸 You found **{gain} petals** under a leaf!")
+    gain = random.randint(5, 25); update_balance(ctx.author.id, gain)
+    await ctx.send(f"🌸 You found **{gain} petals**!")
 
 @bot.command()
 @commands.cooldown(1, 60, commands.BucketType.user)
 async def work(ctx):
-    gain = random.randint(50, 150)
-    update_balance(ctx.author.id, gain)
-    await ctx.send(f"💼 You trimmed the hedges and earned **{gain} petals**.")
-
-@bot.command()
-@commands.cooldown(1, 120, commands.BucketType.user)
-async def farm(ctx):
-    gain = random.randint(150, 400)
-    update_balance(ctx.author.id, gain)
-    await ctx.send(f"🚜 Harvest complete! +**{gain} petals**.")
-
-@bot.command()
-@commands.cooldown(1, 60, commands.BucketType.user)
-async def hunt(ctx):
-    if random.random() < 0.2:
-        return await ctx.send("🏹 No luck hunting today.")
-    gain = random.randint(60, 120)
-    update_balance(ctx.author.id, gain)
-    await ctx.send(f"🏹 You caught a rare bug! Sold for **{gain} petals**.")
-
-@bot.command()
-async def give(ctx, member: discord.Member, amount: int):
-    if amount <= 0 or get_balance(ctx.author.id) < amount or member.id == ctx.author.id:
-        return await ctx.send("❌ Invalid transaction.")
-    update_balance(ctx.author.id, -amount)
-    update_balance(member.id, amount)
-    await ctx.send(f"🌸 Gave **{amount} petals** to **{member.display_name}**!")
-
-# --- REWARD SYSTEM ---
-def check_claim(user_id, reward_type, delta):
-    now = datetime.now()
-    user_times = last_claimed.get(user_id, {})
-    last_time = user_times.get(reward_type)
-    if last_time and now < last_time + delta:
-        return False, (last_time + delta) - now
-    if user_id not in last_claimed: last_claimed[user_id] = {}
-    last_claimed[user_id][reward_type] = now
-    return True, None
+    gain = random.randint(50, 150); update_balance(ctx.author.id, gain)
+    await ctx.send(f"💼 You worked and earned **{gain} petals**.")
 
 @bot.command()
 async def daily(ctx):
-    claimed, time_left = check_claim(ctx.author.id, "daily", timedelta(days=1))
-    if not claimed: return await ctx.send(f"⏳ Wait {time_left.seconds//3600}h.")
-    update_balance(ctx.author.id, 500)
-    await ctx.send("☀️ Daily reward of **500 petals** claimed!")
+    now = datetime.now()
+    user_id = ctx.author.id
+    if user_id in last_claimed and now < last_claimed[user_id].get('d', now - timedelta(1)) + timedelta(days=1):
+        return await ctx.send("⏳ Daily reward not ready yet!")
+    if user_id not in last_claimed: last_claimed[user_id] = {}
+    last_claimed[user_id]['d'] = now
+    update_balance(user_id, 500)
+    await ctx.send("☀️ +500 petals!")
+
+# --- MINI GAMES ---
+@bot.command()
+async def mines(ctx, bet: int):
+    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Not enough petals.")
+    bombs = random.sample(range(1, 10), 3)
+    revealed = []
+    await ctx.send("💣 Pick 1-9. Don't hit a bomb! Type `cashout` to stop.")
+    while len(revealed) < 6:
+        try:
+            msg = await bot.wait_for('message', check=lambda m: m.author == ctx.author, timeout=30.0)
+            if msg.content.lower() == 'cashout' and revealed:
+                win = int(bet * (1.3 ** len(revealed)))
+                update_balance(ctx.author.id, win - bet)
+                return await ctx.send(f"💰 Cashed out with **{win} petals**!")
+            if not msg.content.isdigit(): continue
+            pick = int(msg.content)
+            if pick in bombs:
+                update_balance(ctx.author.id, -bet)
+                return await ctx.send(f"💥 BOOM! You lost {bet} petals.")
+            if pick not in revealed and 1 <= pick <= 9:
+                revealed.append(pick)
+                await ctx.send(f"🍃 Safe! ({len(revealed)}/6). Next number or `cashout`?")
+        except asyncio.TimeoutError: return await ctx.send("⏰ Timed out.")
 
 @bot.command()
-async def weekly(ctx):
-    claimed, time_left = check_claim(ctx.author.id, "weekly", timedelta(weeks=1))
-    if not claimed: return await ctx.send(f"⏳ Wait {time_left.days} days.")
-    update_balance(ctx.author.id, 3000)
-    await ctx.send("🌱 Weekly reward of **3000 petals** claimed!")
+async def guess(ctx, bet: int):
+    if get_balance(ctx.author.id) < bet or bet <= 0: return
+    secret = random.randint(1, 20)
+    await ctx.send("🌸 Guess (1-20). 3 tries!")
+    for i in range(3):
+        try:
+            m = await bot.wait_for('message', check=lambda m: m.author == ctx.author, timeout=20.0)
+            g = int(m.content)
+            if g == secret:
+                update_balance(ctx.author.id, bet); return await ctx.send(f"✅ Yes! +{bet} petals.")
+            await ctx.send("Higher! 📈" if g < secret else "Lower! 📉")
+        except: continue
+    update_balance(ctx.author.id, -bet)
+    await ctx.send(f"🥀 Failed. It was {secret}.")
 
-@bot.command()
-async def monthly(ctx):
-    claimed, time_left = check_claim(ctx.author.id, "monthly", timedelta(days=30))
-    if not claimed: return await ctx.send(f"⏳ Wait {time_left.days} days.")
-    update_balance(ctx.author.id, 15000)
-    await ctx.send("🌸 Monthly reward of **15000 petals** claimed!")
-
-@bot.command()
-async def yearly(ctx):
-    claimed, time_left = check_claim(ctx.author.id, "yearly", timedelta(days=365))
-    if not claimed: return await ctx.send(f"⏳ Wait {time_left.days} days.")
-    update_balance(ctx.author.id, 100000)
-    await ctx.send("👑 Yearly reward of **100000 petals** claimed!")
-
-# --- GAMES ---
 @bot.command()
 async def dice(ctx, bet: int):
-    if get_balance(ctx.author.id) < bet or bet <= 0: return await ctx.send("❌ Poor.")
-    u, b = random.randint(1, 6), random.randint(1, 6)
-    if u > b:
-        update_balance(ctx.author.id, bet)
-        await ctx.send(f"🎲 Win! {u} vs {b}. +{bet}")
-    elif u < b:
-        update_balance(ctx.author.id, -bet)
-        await ctx.send(f"🎲 Loss! {u} vs {b}. -{bet}")
-    else: await ctx.send("🎲 Tie!")
-
-@bot.command()
-async def rps(ctx, choice: str, bet: int):
     if get_balance(ctx.author.id) < bet or bet <= 0: return
-    options = ["rock", "paper", "scissors"]
-    bot_c = random.choice(options)
-    user_c = choice.lower()
-    if user_c not in options: return
-    if user_c == bot_c: await ctx.send(f"Tie! Both chose {bot_c}")
-    elif (user_c == "rock" and bot_c == "scissors") or (user_c == "paper" and bot_c == "rock") or (user_c == "scissors" and bot_c == "paper"):
-        update_balance(ctx.author.id, bet)
-        await ctx.send(f"Win! I chose {bot_c}. +{bet}")
-    else:
-        update_balance(ctx.author.id, -bet)
-        await ctx.send(f"Loss! I chose {bot_c}. -{bet}")
+    u, b = random.randint(1, 6), random.randint(1, 6)
+    if u > b: update_balance(ctx.author.id, bet); res = f"Win! +{bet}"
+    elif u < b: update_balance(ctx.author.id, -bet); res = f"Loss! -{bet}"
+    else: res = "Tie!"
+    await ctx.send(f"🎲 You: {u} | Me: {b}. {res}")
 
 @bot.command(aliases=["lb"])
 async def leaderboard(ctx):
-    if not economy: return await ctx.send("Empty garden!")
     sorted_e = sorted(economy.items(), key=lambda x: x[1], reverse=True)[:5]
     text = "\n".join([f"**{i+1}.** <@{u[0]}> - {u[1]} petals" for i, u in enumerate(sorted_e)])
-    await ctx.send(embed=discord.Embed(title="🌸 Top Gardeners", description=text, color=0xffb7c5))
+    await ctx.send(embed=discord.Embed(title="🌸 Top Gardeners", description=text or "None", color=0xffb7c5))
 
 @bot.event
 async def on_command_error(ctx, error):
