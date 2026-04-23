@@ -8,6 +8,411 @@ from dotenv import load_dotenv
 from keep_alive import keep_alive
 import math
 from datetime import datetime, timedelta
+import json
+from pymongo import MongoClient
+
+# --- PERMANENT DATABASE SYSTEM for RENDER (MongoDB Atlas) ---
+# Check if running on Render
+IS_RENDER = os.getenv('RENDER', False)
+
+# MongoDB Connection
+MONGODB_URI = os.getenv('MONGODB_URI')
+if MONGODB_URI:
+    try:
+        mongo_client = MongoClient(MONGODB_URI)
+        db = mongo_client['blossom_garden_bot']
+        
+        # MongoDB Collections
+        economy_collection = db['economy']
+        inventory_collection = db['inventory']
+        pets_collection = db['pets']
+        cooldowns_collection = db['cooldowns']
+        redeem_collection = db['redeem']
+        channels_collection = db['channels']
+        buffs_collection = db['buffs']
+        
+        USE_MONGODB = True
+        print("✅ Connected to MongoDB Atlas for persistent storage!")
+    except Exception as e:
+        print(f"❌ MongoDB connection failed: {e}")
+        USE_MONGODB = False
+else:
+    USE_MONGODB = False
+    print("⚠️ MongoDB not configured, using local file storage")
+
+# File paths for local backup
+DATA_FILES = {
+    'economy': 'data/economy.json',
+    'inventory': 'data/inventory.json',
+    'pets': 'data/pets.json',
+    'cooldowns': 'data/cooldowns.json',
+    'shop': 'data/shop.json',
+    'redeem': 'data/redeem.json',
+    'channels': 'data/channels.json',
+    'buffs': 'data/buffs.json'
+}
+
+# Create data directory if it doesn't exist
+if not os.path.exists('data'):
+    os.makedirs('data')
+
+def load_all_data():
+    """Load all data from MongoDB or local files"""
+    global economy, player_inventory, player_pets, pet_equipped, player_buffs, player_permanents
+    global beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown
+    global daily_cooldown, weekly_cooldown, hourly_cooldown, gift_cooldown
+    global pet_feed_cooldown, pet_play_cooldown, pet_cooldown
+    global redeem_codes, server_channels
+    
+    if USE_MONGODB:
+        try:
+            # Load from MongoDB
+            economy_data = economy_collection.find_one({'_id': 'economy'})
+            economy = economy_data.get('data', {}) if economy_data else {}
+            economy = {int(k): v for k, v in economy.items()}
+            
+            inventory_data = inventory_collection.find_one({'_id': 'inventory'})
+            player_inventory = inventory_data.get('data', {}) if inventory_data else {}
+            player_inventory = {int(k): v for k, v in player_inventory.items()}
+            
+            pets_data = pets_collection.find_one({'_id': 'pets'})
+            player_pets = pets_data.get('data', {}) if pets_data else {}
+            player_pets = {int(k): v for k, v in player_pets.items()}
+            
+            pet_equipped_data = pets_collection.find_one({'_id': 'pet_equipped'})
+            pet_equipped = pet_equipped_data.get('data', {}) if pet_equipped_data else {}
+            pet_equipped = {int(k): v for k, v in pet_equipped.items()}
+            
+            buffs_data = buffs_collection.find_one({'_id': 'buffs'})
+            player_buffs = buffs_data.get('data', {}) if buffs_data else {}
+            player_buffs = {int(k): v for k, v in player_buffs.items()}
+            
+            cooldowns_data = cooldowns_collection.find_one({'_id': 'cooldowns'})
+            cooldowns = cooldowns_data.get('data', {}) if cooldowns_data else {}
+            
+            # Reset cooldown dictionaries
+            beg_cooldown = {}
+            farm_cooldown = {}
+            hunt_cooldown = {}
+            work_cooldown = {}
+            daily_cooldown = {}
+            weekly_cooldown = {}
+            hourly_cooldown = {}
+            gift_cooldown = {}
+            pet_feed_cooldown = {}
+            pet_play_cooldown = {}
+            pet_cooldown = {}
+            
+            # Process cooldowns
+            for user_id, data in cooldowns.items():
+                user_id_int = int(user_id)
+                if 'beg' in data:
+                    beg_cooldown[user_id_int] = datetime.fromisoformat(data['beg'])
+                if 'farm' in data:
+                    farm_cooldown[user_id_int] = datetime.fromisoformat(data['farm'])
+                if 'hunt' in data:
+                    hunt_cooldown[user_id_int] = datetime.fromisoformat(data['hunt'])
+                if 'work' in data:
+                    work_cooldown[user_id_int] = datetime.fromisoformat(data['work'])
+                if 'daily' in data:
+                    daily_cooldown[user_id_int] = datetime.fromisoformat(data['daily'])
+                if 'weekly' in data:
+                    weekly_cooldown[user_id_int] = datetime.fromisoformat(data['weekly'])
+                if 'hourly' in data:
+                    hourly_cooldown[user_id_int] = datetime.fromisoformat(data['hourly'])
+                if 'gift' in data:
+                    gift_cooldown[user_id_int] = (datetime.fromisoformat(data['gift']['date']), data['gift']['amount'])
+                if 'pet_feed' in data:
+                    pet_feed_cooldown[user_id_int] = datetime.fromisoformat(data['pet_feed'])
+                if 'pet_play' in data:
+                    pet_play_cooldown[user_id_int] = datetime.fromisoformat(data['pet_play'])
+                if 'pet_reward' in data:
+                    pet_cooldown[user_id_int] = datetime.fromisoformat(data['pet_reward'])
+            
+            redeem_data = redeem_collection.find_one({'_id': 'redeem'})
+            redeem_codes = redeem_data.get('data', {}) if redeem_data else {}
+            
+            channels_data = channels_collection.find_one({'_id': 'channels'})
+            server_channels = channels_data.get('data', {}) if channels_data else {}
+            server_channels = {int(k): v for k, v in server_channels.items()}
+            
+            print("✅ Loaded all data from MongoDB Atlas")
+        except Exception as e:
+            print(f"❌ Error loading from MongoDB: {e}")
+            USE_MONGODB = False
+            load_from_files()
+    else:
+        load_from_files()
+
+def load_from_files():
+    """Load data from local JSON files (backup)"""
+    global economy, player_inventory, player_pets, pet_equipped, player_buffs, player_permanents
+    global beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown
+    global daily_cooldown, weekly_cooldown, hourly_cooldown, gift_cooldown
+    global pet_feed_cooldown, pet_play_cooldown, pet_cooldown
+    global redeem_codes, server_channels
+    
+    try:
+        with open(DATA_FILES['economy'], 'r') as f:
+            economy = json.load(f)
+            economy = {int(k): v for k, v in economy.items()}
+    except:
+        economy = {}
+    
+    try:
+        with open(DATA_FILES['inventory'], 'r') as f:
+            inventory_data = json.load(f)
+            player_inventory = {int(k): v for k, v in inventory_data.items()}
+    except:
+        player_inventory = {}
+    
+    try:
+        with open(DATA_FILES['pets'], 'r') as f:
+            pets_data = json.load(f)
+            player_pets = {int(k): v for k, v in pets_data.items()}
+    except:
+        player_pets = {}
+    
+    try:
+        with open(DATA_FILES['pets'] + '_equipped', 'r') as f:
+            pet_equipped_data = json.load(f)
+            pet_equipped = {int(k): v for k, v in pet_equipped_data.items()}
+    except:
+        pet_equipped = {}
+    
+    try:
+        with open(DATA_FILES['buffs'], 'r') as f:
+            buffs_data = json.load(f)
+            player_buffs = {int(k): v for k, v in buffs_data.items()}
+    except:
+        player_buffs = {}
+    
+    # Initialize cooldown dictionaries
+    beg_cooldown = {}
+    farm_cooldown = {}
+    hunt_cooldown = {}
+    work_cooldown = {}
+    daily_cooldown = {}
+    weekly_cooldown = {}
+    hourly_cooldown = {}
+    gift_cooldown = {}
+    pet_feed_cooldown = {}
+    pet_play_cooldown = {}
+    pet_cooldown = {}
+    
+    try:
+        with open(DATA_FILES['cooldowns'], 'r') as f:
+            cooldowns = json.load(f)
+            for user_id, data in cooldowns.items():
+                user_id_int = int(user_id)
+                if 'beg' in data:
+                    beg_cooldown[user_id_int] = datetime.fromisoformat(data['beg'])
+                if 'farm' in data:
+                    farm_cooldown[user_id_int] = datetime.fromisoformat(data['farm'])
+                if 'hunt' in data:
+                    hunt_cooldown[user_id_int] = datetime.fromisoformat(data['hunt'])
+                if 'work' in data:
+                    work_cooldown[user_id_int] = datetime.fromisoformat(data['work'])
+                if 'daily' in data:
+                    daily_cooldown[user_id_int] = datetime.fromisoformat(data['daily'])
+                if 'weekly' in data:
+                    weekly_cooldown[user_id_int] = datetime.fromisoformat(data['weekly'])
+                if 'hourly' in data:
+                    hourly_cooldown[user_id_int] = datetime.fromisoformat(data['hourly'])
+                if 'gift' in data:
+                    gift_cooldown[user_id_int] = (datetime.fromisoformat(data['gift']['date']), data['gift']['amount'])
+                if 'pet_feed' in data:
+                    pet_feed_cooldown[user_id_int] = datetime.fromisoformat(data['pet_feed'])
+                if 'pet_play' in data:
+                    pet_play_cooldown[user_id_int] = datetime.fromisoformat(data['pet_play'])
+                if 'pet_reward' in data:
+                    pet_cooldown[user_id_int] = datetime.fromisoformat(data['pet_reward'])
+    except:
+        pass
+    
+    try:
+        with open(DATA_FILES['redeem'], 'r') as f:
+            redeem_codes = json.load(f)
+    except:
+        redeem_codes = {}
+    
+    try:
+        with open(DATA_FILES['channels'], 'r') as f:
+            channels_data = json.load(f)
+            server_channels = {int(k): v for k, v in channels_data.items()}
+    except:
+        server_channels = {}
+    
+    player_permanents = {}
+    print("⚠️ Using local file storage")
+
+def save_all_data():
+    """Save all data to MongoDB or local files"""
+    if USE_MONGODB:
+        try:
+            # Save to MongoDB
+            economy_collection.update_one({'_id': 'economy'}, {'$set': {'data': economy}}, upsert=True)
+            inventory_collection.update_one({'_id': 'inventory'}, {'$set': {'data': player_inventory}}, upsert=True)
+            pets_collection.update_one({'_id': 'pets'}, {'$set': {'data': player_pets}}, upsert=True)
+            pets_collection.update_one({'_id': 'pet_equipped'}, {'$set': {'data': pet_equipped}}, upsert=True)
+            buffs_collection.update_one({'_id': 'buffs'}, {'$set': {'data': player_buffs}}, upsert=True)
+            
+            # Save cooldowns
+            cooldowns = {}
+            all_users = set(list(beg_cooldown.keys()) + list(farm_cooldown.keys()) + list(hunt_cooldown.keys()) + 
+                            list(work_cooldown.keys()) + list(daily_cooldown.keys()) + list(weekly_cooldown.keys()) + 
+                            list(hourly_cooldown.keys()) + list(gift_cooldown.keys()) + list(pet_feed_cooldown.keys()) + 
+                            list(pet_play_cooldown.keys()) + list(pet_cooldown.keys()))
+            
+            for user_id in all_users:
+                cooldowns[str(user_id)] = {}
+                if user_id in beg_cooldown:
+                    cooldowns[str(user_id)]['beg'] = beg_cooldown[user_id].isoformat()
+                if user_id in farm_cooldown:
+                    cooldowns[str(user_id)]['farm'] = farm_cooldown[user_id].isoformat()
+                if user_id in hunt_cooldown:
+                    cooldowns[str(user_id)]['hunt'] = hunt_cooldown[user_id].isoformat()
+                if user_id in work_cooldown:
+                    cooldowns[str(user_id)]['work'] = work_cooldown[user_id].isoformat()
+                if user_id in daily_cooldown:
+                    cooldowns[str(user_id)]['daily'] = daily_cooldown[user_id].isoformat()
+                if user_id in weekly_cooldown:
+                    cooldowns[str(user_id)]['weekly'] = weekly_cooldown[user_id].isoformat()
+                if user_id in hourly_cooldown:
+                    cooldowns[str(user_id)]['hourly'] = hourly_cooldown[user_id].isoformat()
+                if user_id in gift_cooldown:
+                    cooldowns[str(user_id)]['gift'] = {
+                        'date': gift_cooldown[user_id][0].isoformat(),
+                        'amount': gift_cooldown[user_id][1]
+                    }
+                if user_id in pet_feed_cooldown:
+                    cooldowns[str(user_id)]['pet_feed'] = pet_feed_cooldown[user_id].isoformat()
+                if user_id in pet_play_cooldown:
+                    cooldowns[str(user_id)]['pet_play'] = pet_play_cooldown[user_id].isoformat()
+                if user_id in pet_cooldown:
+                    cooldowns[str(user_id)]['pet_reward'] = pet_cooldown[user_id].isoformat()
+            
+            cooldowns_collection.update_one({'_id': 'cooldowns'}, {'$set': {'data': cooldowns}}, upsert=True)
+            redeem_collection.update_one({'_id': 'redeem'}, {'$set': {'data': redeem_codes}}, upsert=True)
+            channels_collection.update_one({'_id': 'channels'}, {'$set': {'data': server_channels}}, upsert=True)
+            
+            print("💾 Saved all data to MongoDB Atlas")
+        except Exception as e:
+            print(f"❌ Error saving to MongoDB: {e}")
+            save_to_files()
+    else:
+        save_to_files()
+
+def save_to_files():
+    """Save data to local JSON files (backup)"""
+    with open(DATA_FILES['economy'], 'w') as f:
+        json.dump(economy, f, indent=4)
+    with open(DATA_FILES['inventory'], 'w') as f:
+        json.dump(player_inventory, f, indent=4)
+    with open(DATA_FILES['pets'], 'w') as f:
+        json.dump(player_pets, f, indent=4)
+    with open(DATA_FILES['pets'] + '_equipped', 'w') as f:
+        json.dump(pet_equipped, f, indent=4)
+    with open(DATA_FILES['buffs'], 'w') as f:
+        json.dump(player_buffs, f, indent=4)
+    
+    # Save cooldowns
+    cooldowns = {}
+    all_users = set(list(beg_cooldown.keys()) + list(farm_cooldown.keys()) + list(hunt_cooldown.keys()) + 
+                    list(work_cooldown.keys()) + list(daily_cooldown.keys()) + list(weekly_cooldown.keys()) + 
+                    list(hourly_cooldown.keys()) + list(gift_cooldown.keys()) + list(pet_feed_cooldown.keys()) + 
+                    list(pet_play_cooldown.keys()) + list(pet_cooldown.keys()))
+    
+    for user_id in all_users:
+        cooldowns[str(user_id)] = {}
+        if user_id in beg_cooldown:
+            cooldowns[str(user_id)]['beg'] = beg_cooldown[user_id].isoformat()
+        if user_id in farm_cooldown:
+            cooldowns[str(user_id)]['farm'] = farm_cooldown[user_id].isoformat()
+        if user_id in hunt_cooldown:
+            cooldowns[str(user_id)]['hunt'] = hunt_cooldown[user_id].isoformat()
+        if user_id in work_cooldown:
+            cooldowns[str(user_id)]['work'] = work_cooldown[user_id].isoformat()
+        if user_id in daily_cooldown:
+            cooldowns[str(user_id)]['daily'] = daily_cooldown[user_id].isoformat()
+        if user_id in weekly_cooldown:
+            cooldowns[str(user_id)]['weekly'] = weekly_cooldown[user_id].isoformat()
+        if user_id in hourly_cooldown:
+            cooldowns[str(user_id)]['hourly'] = hourly_cooldown[user_id].isoformat()
+        if user_id in gift_cooldown:
+            cooldowns[str(user_id)]['gift'] = {
+                'date': gift_cooldown[user_id][0].isoformat(),
+                'amount': gift_cooldown[user_id][1]
+            }
+        if user_id in pet_feed_cooldown:
+            cooldowns[str(user_id)]['pet_feed'] = pet_feed_cooldown[user_id].isoformat()
+        if user_id in pet_play_cooldown:
+            cooldowns[str(user_id)]['pet_play'] = pet_play_cooldown[user_id].isoformat()
+        if user_id in pet_cooldown:
+            cooldowns[str(user_id)]['pet_reward'] = pet_cooldown[user_id].isoformat()
+    
+    with open(DATA_FILES['cooldowns'], 'w') as f:
+        json.dump(cooldowns, f, indent=4)
+    with open(DATA_FILES['redeem'], 'w') as f:
+        json.dump(redeem_codes, f, indent=4)
+    with open(DATA_FILES['channels'], 'w') as f:
+        json.dump(server_channels, f, indent=4)
+
+def update_balance(user_id, amount):
+    global economy
+    economy[user_id] = economy.get(user_id, 0) + amount
+    if economy[user_id] <= 0:
+        economy[user_id] = 0
+    save_all_data()
+
+def get_balance(user_id):
+    return economy.get(user_id, 0)
+
+def add_to_inventory(user_id, item_id, quantity=1):
+    global player_inventory
+    if user_id not in player_inventory:
+        player_inventory[user_id] = {}
+    player_inventory[user_id][item_id] = player_inventory[user_id].get(item_id, 0) + quantity
+    save_all_data()
+
+def remove_from_inventory(user_id, item_id, quantity=1):
+    global player_inventory
+    if user_id in player_inventory and item_id in player_inventory[user_id]:
+        player_inventory[user_id][item_id] -= quantity
+        if player_inventory[user_id][item_id] <= 0:
+            del player_inventory[user_id][item_id]
+        save_all_data()
+
+def has_item(user_id, item_id, quantity=1):
+    return player_inventory.get(user_id, {}).get(item_id, 0) >= quantity
+
+def get_inventory(user_id):
+    return player_inventory.get(user_id, {})
+
+def set_cooldown(cooldown_dict, user_id):
+    cooldown_dict[user_id] = datetime.now()
+    save_all_data()
+
+def check_cooldown(cooldown_dict, user_id, cooldown_seconds=86400):
+    if user_id in cooldown_dict:
+        last_used = cooldown_dict[user_id]
+        time_passed = (datetime.now() - last_used).total_seconds()
+        if time_passed < cooldown_seconds:
+            remaining = cooldown_seconds - time_passed
+            return True, remaining
+    return False, 0
+
+def format_time(seconds):
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    seconds = int(seconds % 60)
+    
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    elif minutes > 0:
+        return f"{minutes}m {seconds}s"
+    else:
+        return f"{seconds}s"
 
 # --- BOT CONFIGURATION ---
 load_dotenv()
@@ -22,56 +427,188 @@ bot.remove_command('help')
 # --- ADMIN LIST ---
 ADMINS = ["dispute12", "xion0624"]
 
-# --- DATABASE ---
+# --- DATABASE INITIALIZATION ---
+# Initialize all global variables
 economy = {}
-server_channels = {} 
-redeem_codes = {} 
-daily_cooldown = {}
-weekly_cooldown = {}
-hourly_cooldown = {}
-
-# --- COOLDOWN DICTIONARIES FOR FARM/BEG/HUNT/WORK ---
+player_inventory = {}
+player_pets = {}
+pet_equipped = {}
+player_buffs = {}
+player_permanents = {}
 beg_cooldown = {}
 farm_cooldown = {}
 hunt_cooldown = {}
 work_cooldown = {}
-
-# --- GIFTING SYSTEM VARIABLES ---
+daily_cooldown = {}
+weekly_cooldown = {}
+hourly_cooldown = {}
 gift_cooldown = {}
-DAILY_GIFT_LIMIT = 1000000  # 1,000,000 petals per day
+pet_feed_cooldown = {}
+pet_play_cooldown = {}
+pet_cooldown = {}
+redeem_codes = {}
+server_channels = {}
 
-def get_balance(user_id):
-    return economy.get(user_id, 0)
+# Load all existing data
+load_all_data()
 
-def update_balance(user_id, amount):
-    economy[user_id] = get_balance(user_id) + amount
+# --- SHOP ITEMS ---
+shop_items = {
+    "flower_coin": {
+        "name": "🌸 Flower Coin",
+        "emoji": "🌸",
+        "price": 1000,
+        "description": "A beautiful collectible flower coin",
+        "type": "collectible"
+    },
+    "rainbow_petal": {
+        "name": "🌈 Rainbow Petal",
+        "emoji": "🌈",
+        "price": 5000,
+        "description": "A rare rainbow-colored petal",
+        "type": "collectible"
+    },
+    "golden_flower": {
+        "name": "⭐ Golden Flower",
+        "emoji": "⭐",
+        "price": 10000,
+        "description": "A legendary golden flower",
+        "type": "collectible"
+    },
+    "lucky_charm": {
+        "name": "🍀 Lucky Charm",
+        "emoji": "🍀",
+        "price": 25000,
+        "description": "Increases your luck in games! (5% better odds)",
+        "type": "buff"
+    },
+    "xp_boost": {
+        "name": "⚡ XP Boost",
+        "emoji": "⚡",
+        "price": 15000,
+        "description": "Doubles daily rewards for 24 hours",
+        "type": "buff"
+    },
+    "protection_amulet": {
+        "name": "🛡️ Protection Amulet",
+        "emoji": "🛡️",
+        "price": 30000,
+        "description": "Protects you from one loss in any game",
+        "type": "consumable"
+    },
+    "double_win": {
+        "name": "🎰 Double Win Token",
+        "emoji": "🎰",
+        "price": 50000,
+        "description": "Doubles your next win in any game!",
+        "type": "consumable"
+    },
+    "bank_vault": {
+        "name": "🏦 Bank Vault",
+        "emoji": "🏦",
+        "price": 100000,
+        "description": "Increases your daily gift limit by 500,000",
+        "type": "permanent"
+    },
+    "mystery_box": {
+        "name": "🎁 Mystery Box",
+        "emoji": "🎁",
+        "price": 7500,
+        "description": "Contains random rewards!",
+        "type": "mystery"
+    },
+    "petal_wand": {
+        "name": "✨ Petal Wand",
+        "emoji": "✨",
+        "price": 150000,
+        "description": "Legendary wand that glows with power",
+        "type": "collectible"
+    }
+}
 
-def check_cooldown(cooldown_dict, user_id, cooldown_seconds=86400):
-    """Check if user is on cooldown, returns (is_on_cooldown, remaining_time)"""
-    if user_id in cooldown_dict:
-        last_used = cooldown_dict[user_id]
-        time_passed = (datetime.now() - last_used).total_seconds()
-        if time_passed < cooldown_seconds:
-            remaining = cooldown_seconds - time_passed
-            return True, remaining
-    return False, 0
-
-def set_cooldown(cooldown_dict, user_id):
-    """Set cooldown for user"""
-    cooldown_dict[user_id] = datetime.now()
-
-def format_time(seconds):
-    """Format seconds into readable time"""
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    seconds = int(seconds % 60)
-    
-    if hours > 0:
-        return f"{hours}h {minutes}m"
-    elif minutes > 0:
-        return f"{minutes}m {seconds}s"
-    else:
-        return f"{seconds}s"
+# --- PET SHOP ITEMS ---
+pet_shop_items = {
+    "basic_cat": {
+        "name": "🐱 Garden Cat",
+        "emoji": "🐱",
+        "price": 1000000,
+        "description": "A cute cat that guards your garden",
+        "daily_reward": 500,
+        "rarity": "common",
+        "max_level": 10,
+        "xp_per_level": 1000
+    },
+    "basic_dog": {
+        "name": "🐕 Garden Dog",
+        "emoji": "🐕",
+        "price": 1500000,
+        "description": "A loyal dog that finds treasures",
+        "daily_reward": 750,
+        "rarity": "common",
+        "max_level": 10,
+        "xp_per_level": 1000
+    },
+    "magical_fox": {
+        "name": "🦊 Magical Fox",
+        "emoji": "🦊",
+        "price": 5000000,
+        "description": "A mystical fox that brings good luck",
+        "daily_reward": 2000,
+        "rarity": "rare",
+        "max_level": 15,
+        "xp_per_level": 1500
+    },
+    "crystal_dragon": {
+        "name": "🐉 Crystal Dragon",
+        "emoji": "🐉",
+        "price": 10000000,
+        "description": "A majestic dragon that hoards petals",
+        "daily_reward": 5000,
+        "rarity": "epic",
+        "max_level": 20,
+        "xp_per_level": 2000
+    },
+    "phoenix": {
+        "name": "🔥 Phoenix",
+        "emoji": "🔥",
+        "price": 25000000,
+        "description": "A legendary bird that rises from ashes",
+        "daily_reward": 15000,
+        "rarity": "legendary",
+        "max_level": 25,
+        "xp_per_level": 3000
+    },
+    "unicorn": {
+        "name": "🦄 Rainbow Unicorn",
+        "emoji": "🦄",
+        "price": 50000000,
+        "description": "A mythical unicorn that spreads magic",
+        "daily_reward": 30000,
+        "rarity": "mythic",
+        "max_level": 30,
+        "xp_per_level": 5000
+    },
+    "golden_dragon": {
+        "name": "👑 Golden Dragon",
+        "emoji": "👑",
+        "price": 100000000,
+        "description": "The rarest dragon, covered in pure gold",
+        "daily_reward": 75000,
+        "rarity": "godly",
+        "max_level": 50,
+        "xp_per_level": 10000
+    },
+    "void_walker": {
+        "name": "🌑 Void Walker",
+        "emoji": "🌑",
+        "price": 250000000,
+        "description": "A mysterious being from another dimension",
+        "daily_reward": 150000,
+        "rarity": "transcendent",
+        "max_level": 100,
+        "xp_per_level": 25000
+    }
+}
 
 # --- UI: REDEEM MODAL ---
 class RedeemModal(Modal, title="🌸 Redeem Petals - Enter Your Code"):
@@ -86,6 +623,7 @@ class RedeemModal(Modal, title="🌸 Redeem Petals - Enter Your Code"):
                 data["uses"] -= 1
                 if data["uses"] <= 0: 
                     del redeem_codes[code_text]
+                save_all_data()
                 
                 embed = discord.Embed(
                     title="🌸 Voucher Redeemed!",
@@ -104,7 +642,7 @@ class RedeemStarterView(View):
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RedeemModal())
 
-# --- NERFED CRASH GAME (Higher crash chance) ---
+# --- NERFED CRASH GAME ---
 class CrashView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=120.0)
@@ -113,7 +651,6 @@ class CrashView(View):
         self.multiplier = 1.0
         self.cashed_out = False
         self.crashed = False
-        # More aggressive crash pattern - higher chance of early crash
         crash_type = random.choice(["early", "early", "early", "normal", "normal", "late"])
         if crash_type == "early":
             self.crash_at = round(random.uniform(1.05, 1.5), 2)
@@ -196,7 +733,7 @@ class CrashView(View):
             embed.add_field(name="⚠️ Crash Risk", value=f"{risk_percentage}%", inline=True)
             await msg.edit(embed=embed, view=self)
 
-# --- NERFED MINES GAME (More bombs) ---
+# --- NERFED MINES GAME ---
 class MinesButton(Button):
     def __init__(self, num): 
         super().__init__(label="🌸", style=discord.ButtonStyle.secondary, row=(num-1)//3, emoji="🌸")
@@ -269,7 +806,7 @@ class MinesView(View):
         for i in range(1, 10):
             self.add_item(MinesButton(i))
 
-# --- NERFED COLOR GAME (Reduced win multiplier) ---
+# --- NERFED COLOR GAME ---
 class ColorButton(Button):
     def __init__(self, name, emoji, style_color):
         super().__init__(label=name, emoji=emoji, style=style_color)
@@ -328,7 +865,7 @@ class ColorView(View):
         for name, emoji, style in color_configs:
             self.add_item(ColorButton(name, emoji, style))
 
-# --- NERFED COINFLIP GAME (Lower win multiplier) ---
+# --- NERFED COINFLIP GAME ---
 class CoinflipView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -368,19 +905,16 @@ class CoinflipView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- NERFED HIGHER OR LOWER GAME (Lower win multiplier) ---
+# --- FIXED HIGHER OR LOWER GAME ---
 class HigherLowerView(View):
-    def __init__(self, ctx, bet):
+    def __init__(self, ctx, bet, current_card, card_display, card_emoji):
         super().__init__(timeout=30.0)
         self.ctx = ctx
         self.bet = bet
-        self.current_card = random.randint(1, 13)
+        self.current_card = current_card
+        self.card_display = card_display
+        self.card_emoji = card_emoji
         self.game_active = True
-        self.update_display()
-    
-    def update_display(self):
-        card_names = {1:"A", 11:"J", 12:"Q", 13:"K"}
-        self.card_display = card_names.get(self.current_card, str(self.current_card))
     
     @discord.ui.button(label="⬆️ HIGHER", style=discord.ButtonStyle.success, emoji="⬆️", row=0)
     async def higher(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -402,33 +936,49 @@ class HigherLowerView(View):
         card_names = {1:"A", 11:"J", 12:"Q", 13:"K"}
         next_display = card_names.get(next_card, str(next_card))
         
+        card_emojis = {
+            1: "🃏", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 
+            6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟",
+            11: "👑", 12: "👸", 13: "🤴"
+        }
+        next_emoji = card_emojis.get(next_card, "🎴")
+        
+        current_card_visual = f"{self.card_emoji} **{self.card_display}**"
+        next_card_visual = f"{next_emoji} **{next_display}**"
+        
         if (choice == "higher" and next_card > self.current_card) or (choice == "lower" and next_card < self.current_card):
             win = int(self.bet * 1.8)
             update_balance(self.ctx.author.id, win - self.bet)
+            
             embed = discord.Embed(
                 title="🎴 HIGHER OR LOWER 🎴",
-                description=f"**Your card:** {self.card_display}\n**Next card:** {next_display}\n\n🎉 **CORRECT!** You won {win} petals!",
+                description=f"**Your Card:** {current_card_visual}\n**Next Card:** {next_card_visual}\n\n📈 **{choice.upper()}** was correct!\n\n🎉 **YOU WIN!** +{win} petals!",
                 color=0x00ff00
             )
+            embed.add_field(name="📊 Result", value=f"{self.card_display} → {next_display} ({'Higher' if next_card > self.current_card else 'Lower' if next_card < self.current_card else 'Same'})", inline=False)
+            
         elif next_card == self.current_card:
             embed = discord.Embed(
                 title="🎴 HIGHER OR LOWER 🎴",
-                description=f"**Your card:** {self.card_display}\n**Next card:** {next_display}\n\n🤝 **TIE!** Your bet is returned!",
+                description=f"**Your Card:** {current_card_visual}\n**Next Card:** {next_card_visual}\n\n🤝 **TIE!** The cards are equal!\n\n💫 Your bet of **{self.bet} petals** has been returned!",
                 color=0xffa500
             )
+            embed.add_field(name="📊 Result", value=f"{self.card_display} → {next_display} (Same card!)", inline=False)
+            
         else:
             update_balance(self.ctx.author.id, -self.bet)
             embed = discord.Embed(
                 title="🎴 HIGHER OR LOWER 🎴",
-                description=f"**Your card:** {self.card_display}\n**Next card:** {next_display}\n\n💔 **WRONG!** You lost {self.bet} petals!",
+                description=f"**Your Card:** {current_card_visual}\n**Next Card:** {next_card_visual}\n\n📉 **{choice.upper()}** was wrong!\n\n💔 **YOU LOSE!** -{self.bet} petals!",
                 color=0xff0000
             )
+            embed.add_field(name="📊 Result", value=f"{self.card_display} → {next_display} ({'Higher' if next_card > self.current_card else 'Lower' if next_card < self.current_card else 'Same'})", inline=False)
         
         self.game_active = False
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- NERFED SLOT MACHINE GAME (Lower payouts) ---
+# --- NERFED SLOT MACHINE ---
 class SlotMachineView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -476,7 +1026,7 @@ class SlotMachineView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- NERFED ROULETTE GAME (Lower payouts) ---
+# --- NERFED ROULETTE ---
 class RouletteView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=60.0)
@@ -533,7 +1083,7 @@ class RouletteView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- NERFED TOWER CLIMB (Higher fall chance) ---
+# --- NERFED TOWER CLIMB ---
 class TowerView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=60.0)
@@ -588,7 +1138,7 @@ class TowerView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- NERFED TREASURE HUNT (Lower win multiplier) ---
+# --- NERFED TREASURE HUNT ---
 class TreasureHuntView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -655,7 +1205,7 @@ class TreasureHuntView(View):
             remaining = self.max_attempts - self.attempts
             await interaction.response.edit_message(content=f"Nothing at spot {spot}! Try again! ({remaining} attempt{'s' if remaining > 1 else ''} remaining)", view=self)
 
-# --- DEADLY RUSSIAN ROULETTE (3 Bullets, 6 Chambers) ---
+# --- DEADLY RUSSIAN ROULETTE (3 Bullets) ---
 class RussianRouletteView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -769,7 +1319,7 @@ class RussianRouletteView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- NERFED SCRATCH CARD (Lower payouts) ---
+# --- NERFED SCRATCH CARD ---
 class ScratchView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -831,7 +1381,7 @@ class ScratchView(View):
         else:
             await interaction.response.edit_message(content=f"Scratched! {self.values[index]} revealed! Keep scratching!", view=self)
 
-# --- NERFED HORSE RACING (Lower win multiplier) ---
+# --- NERFED HORSE RACING ---
 class RaceView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -883,7 +1433,7 @@ class RaceView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- NERFED POKER (Ties go to house, lower payouts) ---
+# --- NERFED POKER ---
 class PokerView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -946,7 +1496,7 @@ class PokerView(View):
             return 1
         return 0
 
-# --- NERFED DICE DUEL (Lower win multiplier) ---
+# --- DICE DUEL ---
 class DiceDuelView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -989,7 +1539,7 @@ class DiceDuelView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- DUEL GAME (Player vs Player) ---
+# --- DUEL GAME ---
 class DuelView(View):
     def __init__(self, ctx, opponent, bet):
         super().__init__(timeout=60.0)
@@ -1216,93 +1766,454 @@ class DuelRequestView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- NERFED BLACKJACK (House edge increased) ---
-@bot.command()
-async def blackjack(ctx, bet: int):
-    if get_balance(ctx.author.id) < bet or bet <= 0:
-        return await ctx.send("❌ Not enough petals!")
+# --- SHOP UI VIEWS ---
+class ShopView(View):
+    def __init__(self, ctx, page=0):
+        super().__init__(timeout=60.0)
+        self.ctx = ctx
+        self.page = page
+        self.items_per_page = 5
+        self.items_list = list(shop_items.items())
+        self.total_pages = (len(self.items_list) + self.items_per_page - 1) // self.items_per_page
+        
+        self.update_buttons()
     
-    p = [random.randint(1, 11), random.randint(1, 11)]
-    d = [random.randint(1, 11), random.randint(1, 11)]
+    def update_buttons(self):
+        self.clear_items()
+        
+        start_idx = self.page * self.items_per_page
+        end_idx = min(start_idx + self.items_per_page, len(self.items_list))
+        
+        for i in range(start_idx, end_idx):
+            item_id, item_data = self.items_list[i]
+            button = Button(
+                label=f"{item_data['emoji']} {item_data['name']} - {item_data['price']:,}🌸",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"buy_{item_id}"
+            )
+            button.callback = self.create_buy_callback(item_id, item_data)
+            self.add_item(button)
+        
+        if self.page > 0:
+            prev_btn = Button(label="◀️ Previous", style=discord.ButtonStyle.primary)
+            prev_btn.callback = self.previous_page
+            self.add_item(prev_btn)
+        
+        page_btn = Button(label=f"📄 Page {self.page + 1}/{self.total_pages}", style=discord.ButtonStyle.secondary, disabled=True)
+        self.add_item(page_btn)
+        
+        if self.page < self.total_pages - 1:
+            next_btn = Button(label="Next ▶️", style=discord.ButtonStyle.primary)
+            next_btn.callback = self.next_page
+            self.add_item(next_btn)
+        
+        inv_btn = Button(label="🎒 My Inventory", style=discord.ButtonStyle.success, emoji="🎒", row=2)
+        inv_btn.callback = self.show_inventory
+        self.add_item(inv_btn)
+        
+        close_btn = Button(label="❌ Close", style=discord.ButtonStyle.danger, emoji="❌", row=2)
+        close_btn.callback = self.close_shop
+        self.add_item(close_btn)
     
-    embed = discord.Embed(title="🃏 BLACKJACK", description=f"**Your hand:** {p} = **{sum(p)}**\n**Dealer shows:** [{d[0]}, ?]\n\nType `hit` or `stand`!", color=0xff69b4)
-    await ctx.send(embed=embed)
+    def create_buy_callback(self, item_id, item_data):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user != self.ctx.author:
+                await interaction.response.send_message("❌ This shop isn't for you!", ephemeral=True)
+                return
+            
+            balance = get_balance(interaction.user.id)
+            price = item_data['price']
+            
+            if balance < price:
+                await interaction.response.send_message(f"❌ You don't have enough petals! Need **{price:,}** petals, you have **{balance:,}**", ephemeral=True)
+                return
+            
+            embed = discord.Embed(
+                title=f"🛒 Confirm Purchase",
+                description=f"Are you sure you want to buy **{item_data['emoji']} {item_data['name']}** for **{price:,} petals**?\n\n{item_data['description']}",
+                color=0xffa500
+            )
+            
+            confirm_view = ConfirmPurchaseView(self.ctx, item_id, item_data, price)
+            await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
+        
+        return callback
     
-    def check(m): 
-        return m.author == ctx.author and m.content.lower() in ['hit', 'stand']
+    async def previous_page(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This shop isn't for you!", ephemeral=True)
+            return
+        self.page -= 1
+        self.update_buttons()
+        await self.update_shop_message(interaction)
     
-    try:
-        while sum(p) < 21:
-            msg = await bot.wait_for('message', check=check, timeout=20)
-            if msg.content.lower() == 'hit':
-                p.append(random.randint(1, 11))
-                if sum(p) > 21:
-                    break
-                embed = discord.Embed(title="🃏 BLACKJACK", description=f"**Your hand:** {p} = **{sum(p)}**\nType `hit` or `stand`!", color=0xff69b4)
-                await ctx.send(embed=embed)
-            else:
-                break
-    except:
-        pass
+    async def next_page(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This shop isn't for you!", ephemeral=True)
+            return
+        self.page += 1
+        self.update_buttons()
+        await self.update_shop_message(interaction)
     
-    pt, dt = sum(p), sum(d)
-    while dt < 17:
-        d.append(random.randint(1, 11))
-        dt = sum(d)
+    async def show_inventory(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your inventory!", ephemeral=True)
+            return
+        await self.display_inventory(interaction)
     
-    if pt > 21:
-        update_balance(ctx.author.id, -bet)
-        result = "💥 BUST! You went over 21!"
-        color = 0xff0000
-    elif dt > 21:
-        win = int(bet * 0.95)
-        update_balance(ctx.author.id, win)
-        result = f"🎉 WIN! Dealer busted! You won {win} petals!"
-        color = 0x00ff00
-    elif pt > dt:
-        win = int(bet * 0.95)
-        update_balance(ctx.author.id, win)
-        result = f"🎉 WIN! You beat the dealer! You won {win} petals!"
-        color = 0x00ff00
-    elif pt <= dt:
-        update_balance(ctx.author.id, -bet)
-        result = "💔 LOSS! The dealer wins!"
-        color = 0xff0000
+    async def close_shop(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This shop isn't for you!", ephemeral=True)
+            return
+        await interaction.response.edit_message(content="🛒 Shop closed!", embed=None, view=None)
+        self.stop()
     
-    embed = discord.Embed(title="🃏 GAME RESULT", description=f"**Your hand:** {p} = **{pt}**\n**Dealer hand:** {d} = **{dt}**\n\n{result}", color=color)
-    await ctx.send(embed=embed)
+    async def update_shop_message(self, interaction: discord.Interaction):
+        embed = self.create_shop_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    def create_shop_embed(self):
+        embed = discord.Embed(
+            title="🌸 Petal Shop 🌸",
+            description="Welcome to the Petal Shop! Browse our magical items:",
+            color=0xff69b4
+        )
+        
+        start_idx = self.page * self.items_per_page
+        end_idx = min(start_idx + self.items_per_page, len(self.items_list))
+        
+        for i in range(start_idx, end_idx):
+            item_id, item_data = self.items_list[i]
+            embed.add_field(
+                name=f"{item_data['emoji']} {item_data['name']}",
+                value=f"**Price:** {item_data['price']:,} petals\n**Description:** {item_data['description']}\n**Type:** {item_data['type'].title()}",
+                inline=False
+            )
+        
+        balance = get_balance(self.ctx.author.id)
+        embed.set_footer(text=f"Your Balance: {balance:,} petals | Page {self.page + 1}/{self.total_pages}")
+        
+        return embed
+    
+    async def display_inventory(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        inventory = get_inventory(user_id)
+        
+        if not inventory:
+            embed = discord.Embed(
+                title="🎒 Your Inventory",
+                description="You don't have any items yet! Visit the shop with `b!shop` to buy some!",
+                color=0xffa500
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="🎒 Your Inventory",
+            description="Here are all the items you own:",
+            color=0x00ff88
+        )
+        
+        total_value = 0
+        for item_id, quantity in inventory.items():
+            if item_id in shop_items:
+                item_data = shop_items[item_id]
+                item_value = item_data['price'] * quantity
+                total_value += item_value
+                embed.add_field(
+                    name=f"{item_data['emoji']} {item_data['name']} x{quantity}",
+                    value=f"Value: {item_value:,} petals | {item_data['description']}",
+                    inline=False
+                )
+        
+        embed.set_footer(text=f"Total Inventory Value: {total_value:,} petals")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# --- NERFED RPS (Lower win multiplier) ---
-@bot.command()
-async def rps(ctx, choice: str, bet: int):
-    if get_balance(ctx.author.id) < bet:
-        return await ctx.send("❌ Not enough petals!")
+class ConfirmPurchaseView(View):
+    def __init__(self, ctx, item_id, item_data, price):
+        super().__init__(timeout=30.0)
+        self.ctx = ctx
+        self.item_id = item_id
+        self.item_data = item_data
+        self.price = price
     
-    valid_choices = ["rock", "paper", "scissors"]
-    user_choice = choice.lower()
+    @discord.ui.button(label="✅ Confirm", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your purchase!", ephemeral=True)
+            return
+        
+        balance = get_balance(interaction.user.id)
+        
+        if balance < self.price:
+            await interaction.response.send_message(f"❌ You no longer have enough petals! Need **{self.price:,}** petals", ephemeral=True)
+            self.stop()
+            return
+        
+        update_balance(interaction.user.id, -self.price)
+        add_to_inventory(interaction.user.id, self.item_id)
+        
+        if self.item_id == "mystery_box":
+            reward = random.choice([500, 1000, 2500, 5000, 10000, 25000])
+            update_balance(interaction.user.id, reward)
+            embed = discord.Embed(
+                title="🎁 Mystery Box Opened! 🎁",
+                description=f"You opened the mystery box and found **{reward:,} petals** inside!",
+                color=0x00ff00
+            )
+        else:
+            embed = discord.Embed(
+                title="✅ Purchase Successful!",
+                description=f"You bought **{self.item_data['emoji']} {self.item_data['name']}** for **{self.price:,} petals**!",
+                color=0x00ff00
+            )
+        
+        embed.add_field(name="📊 New Balance", value=f"{get_balance(interaction.user.id):,} petals", inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        self.stop()
     
-    if user_choice not in valid_choices:
-        return await ctx.send("❌ Invalid choice! Choose: `rock`, `paper`, or `scissors`")
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your purchase!", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("❌ Purchase cancelled!", ephemeral=True)
+        self.stop()
+
+# --- PET SHOP UI VIEWS ---
+class PetShopView(View):
+    def __init__(self, ctx, page=0):
+        super().__init__(timeout=60.0)
+        self.ctx = ctx
+        self.page = page
+        self.items_per_page = 4
+        self.items_list = list(pet_shop_items.items())
+        self.total_pages = (len(self.items_list) + self.items_per_page - 1) // self.items_per_page
+        
+        self.update_buttons()
     
-    bot_choice = random.choice(valid_choices)
-    choice_emojis = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
+    def update_buttons(self):
+        self.clear_items()
+        
+        start_idx = self.page * self.items_per_page
+        end_idx = min(start_idx + self.items_per_page, len(self.items_list))
+        
+        for i in range(start_idx, end_idx):
+            pet_id, pet_data = self.items_list[i]
+            price_str = f"{pet_data['price']:,}"
+            button = Button(
+                label=f"{pet_data['emoji']} {pet_data['name']} - {price_str}🌸",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"buy_pet_{pet_id}"
+            )
+            button.callback = self.create_buy_callback(pet_id, pet_data)
+            self.add_item(button)
+        
+        if self.page > 0:
+            prev_btn = Button(label="◀️ Previous", style=discord.ButtonStyle.primary)
+            prev_btn.callback = self.previous_page
+            self.add_item(prev_btn)
+        
+        page_btn = Button(label=f"📄 Page {self.page + 1}/{self.total_pages}", style=discord.ButtonStyle.secondary, disabled=True)
+        self.add_item(page_btn)
+        
+        if self.page < self.total_pages - 1:
+            next_btn = Button(label="Next ▶️", style=discord.ButtonStyle.primary)
+            next_btn.callback = self.next_page
+            self.add_item(next_btn)
+        
+        my_pets_btn = Button(label="🐾 My Pets", style=discord.ButtonStyle.success, emoji="🐾", row=2)
+        my_pets_btn.callback = self.show_my_pets
+        self.add_item(my_pets_btn)
+        
+        close_btn = Button(label="❌ Close", style=discord.ButtonStyle.danger, emoji="❌", row=2)
+        close_btn.callback = self.close_shop
+        self.add_item(close_btn)
     
-    if user_choice == bot_choice:
-        update_balance(ctx.author.id, -bet)
-        result = f"💔 TIE GOES TO HOUSE! -{bet} petals!"
-        color = 0xff0000
-    elif (user_choice == "rock" and bot_choice == "scissors") or (user_choice == "paper" and bot_choice == "rock") or (user_choice == "scissors" and bot_choice == "paper"):
-        win = int(bet * 0.9)
-        update_balance(ctx.author.id, win)
-        result = f"🎉 WIN! +{win} petals!"
-        color = 0x00ff00
-    else:
-        update_balance(ctx.author.id, -bet)
-        result = f"💔 LOSS! -{bet} petals!"
-        color = 0xff0000
+    def create_buy_callback(self, pet_id, pet_data):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user != self.ctx.author:
+                await interaction.response.send_message("❌ This shop isn't for you!", ephemeral=True)
+                return
+            
+            balance = get_balance(interaction.user.id)
+            price = pet_data['price']
+            
+            if balance < price:
+                await interaction.response.send_message(f"❌ You don't have enough petals! Need **{price:,}** petals, you have **{balance:,}**", ephemeral=True)
+                return
+            
+            if interaction.user.id in player_pets and pet_id in player_pets[interaction.user.id]:
+                await interaction.response.send_message(f"❌ You already own {pet_data['emoji']} {pet_data['name']}! You can't have duplicates.", ephemeral=True)
+                return
+            
+            embed = discord.Embed(
+                title=f"🐾 Confirm Pet Purchase",
+                description=f"Are you sure you want to buy **{pet_data['emoji']} {pet_data['name']}** for **{price:,} petals**?\n\n{pet_data['description']}\n\n✨ **Daily Reward:** {pet_data['daily_reward']:,} petals\n📈 **Max Level:** {pet_data['max_level']}\n⭐ **Rarity:** {pet_data['rarity'].title()}",
+                color=0xffa500
+            )
+            
+            confirm_view = ConfirmPetPurchaseView(self.ctx, pet_id, pet_data, price)
+            await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
+        
+        return callback
     
-    embed = discord.Embed(title="✂️ RPS", description=f"**You:** {choice_emojis[user_choice]} {user_choice}\n**Bot:** {choice_emojis[bot_choice]} {bot_choice}\n\n{result}", color=color)
-    await ctx.send(embed=embed)
+    async def previous_page(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This shop isn't for you!", ephemeral=True)
+            return
+        self.page -= 1
+        self.update_buttons()
+        await self.update_shop_message(interaction)
+    
+    async def next_page(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This shop isn't for you!", ephemeral=True)
+            return
+        self.page += 1
+        self.update_buttons()
+        await self.update_shop_message(interaction)
+    
+    async def show_my_pets(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your pet menu!", ephemeral=True)
+            return
+        await self.display_my_pets(interaction)
+    
+    async def close_shop(self, interaction: discord.Interaction):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This shop isn't for you!", ephemeral=True)
+            return
+        await interaction.response.edit_message(content="🐾 Pet shop closed!", embed=None, view=None)
+        self.stop()
+    
+    async def update_shop_message(self, interaction: discord.Interaction):
+        embed = self.create_shop_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    def create_shop_embed(self):
+        embed = discord.Embed(
+            title="🐾 Magical Pet Shop 🐾",
+            description="Welcome to the Pet Shop! Adopt a magical companion:",
+            color=0xff69b4
+        )
+        
+        start_idx = self.page * self.items_per_page
+        end_idx = min(start_idx + self.items_per_page, len(self.items_list))
+        
+        for i in range(start_idx, end_idx):
+            pet_id, pet_data = self.items_list[i]
+            embed.add_field(
+                name=f"{pet_data['emoji']} {pet_data['name']} [{pet_data['rarity'].title()}]",
+                value=f"**Price:** {pet_data['price']:,} petals\n**Daily Reward:** {pet_data['daily_reward']:,} petals\n**Max Level:** {pet_data['max_level']}\n**Description:** {pet_data['description']}",
+                inline=False
+            )
+        
+        balance = get_balance(self.ctx.author.id)
+        embed.set_footer(text=f"Your Balance: {balance:,} petals | Page {self.page + 1}/{self.total_pages}")
+        
+        return embed
+    
+    async def display_my_pets(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        
+        if user_id not in player_pets or not player_pets[user_id]:
+            embed = discord.Embed(
+                title="🐾 Your Pets",
+                description="You don't have any pets yet! Visit the pet shop with `b!petshop` to adopt one!",
+                color=0xffa500
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title=f"🐾 {interaction.user.display_name}'s Pets",
+            description="Here are all your magical companions:",
+            color=0x00ff88
+        )
+        
+        for pet_id, pet in player_pets[user_id].items():
+            pet_data = pet_shop_items[pet_id]
+            equipped = "✅ EQUIPPED" if user_id in pet_equipped and pet_equipped[user_id] == pet_id else ""
+            
+            happiness_bar = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet["happiness"] // 10))
+            
+            embed.add_field(
+                name=f"{pet_data['emoji']} {pet.get('name', pet_data['name'])} {equipped}",
+                value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{pet_data['xp_per_level'] * pet['level']:,}\n**Happiness:** {happiness_bar} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals",
+                inline=False
+            )
+        
+        embed.set_footer(text="Use b!pet equip <name> to equip | b!pet feed | b!pet play | b!pet collect")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+class ConfirmPetPurchaseView(View):
+    def __init__(self, ctx, pet_id, pet_data, price):
+        super().__init__(timeout=30.0)
+        self.ctx = ctx
+        self.pet_id = pet_id
+        self.pet_data = pet_data
+        self.price = price
+    
+    @discord.ui.button(label="✅ Adopt", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your purchase!", ephemeral=True)
+            return
+        
+        balance = get_balance(interaction.user.id)
+        
+        if balance < self.price:
+            await interaction.response.send_message(f"❌ You no longer have enough petals! Need **{self.price:,}** petals", ephemeral=True)
+            self.stop()
+            return
+        
+        update_balance(interaction.user.id, -self.price)
+        
+        if interaction.user.id not in player_pets:
+            player_pets[interaction.user.id] = {}
+        
+        player_pets[interaction.user.id][self.pet_id] = {
+            "name": self.pet_data['name'],
+            "level": 1,
+            "xp": 0,
+            "happiness": 100,
+            "last_fed": datetime.now(),
+            "last_played": datetime.now()
+        }
+        
+        if interaction.user.id not in pet_equipped:
+            pet_equipped[interaction.user.id] = self.pet_id
+        
+        save_all_data()
+        
+        embed = discord.Embed(
+            title="🐾 Pet Adopted! 🐾",
+            description=f"You adopted **{self.pet_data['emoji']} {self.pet_data['name']}** for **{self.price:,} petals**!\n\nYour new companion is ready to explore with you!",
+            color=0x00ff00
+        )
+        embed.add_field(name="✨ Daily Reward", value=f"{self.pet_data['daily_reward']:,} petals per day", inline=True)
+        embed.add_field(name="📊 New Balance", value=f"{get_balance(interaction.user.id):,} petals", inline=True)
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        self.stop()
+    
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, emoji="❌")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your purchase!", ephemeral=True)
+            return
+        
+        await interaction.response.send_message("❌ Adoption cancelled!", ephemeral=True)
+        self.stop()
+
+# --- AUTO-SAVE TASK ---
+async def auto_save():
+    while True:
+        await asyncio.sleep(60)
+        save_all_data()
+        print("💾 Auto-saved all data!")
 
 # --- AUTOMATED TASKS ---
 @tasks.loop(hours=1)
@@ -1331,15 +2242,7 @@ async def hourly_leaderboard():
                 )
                 await chan.send(embed=embed)
 
-@bot.event
-async def on_ready():
-    print(f'🌸 {bot.user} is fully loaded!')
-    print(f'📊 Serving {len(bot.guilds)} servers')
-    print(f'👑 Admins: {", ".join(ADMINS)}')
-    if not hourly_leaderboard.is_running(): 
-        hourly_leaderboard.start()
-
-# --- REWARD COMMANDS (NERFED) ---
+# --- REWARD COMMANDS ---
 @bot.command()
 async def daily(ctx):
     user_id = ctx.author.id
@@ -1356,6 +2259,7 @@ async def daily(ctx):
     reward = random.randint(300, 700)
     update_balance(user_id, reward)
     daily_cooldown[user_id] = now
+    save_all_data()
     
     embed = discord.Embed(
         title="📅 DAILY REWARD!",
@@ -1380,6 +2284,7 @@ async def weekly(ctx):
     reward = random.randint(2000, 5000)
     update_balance(user_id, reward)
     weekly_cooldown[user_id] = now
+    save_all_data()
     
     embed = discord.Embed(
         title="📅 WEEKLY REWARD!",
@@ -1403,6 +2308,7 @@ async def hourly(ctx):
     reward = random.randint(30, 80)
     update_balance(user_id, reward)
     hourly_cooldown[user_id] = now
+    save_all_data()
     
     embed = discord.Embed(
         title="⏰ HOURLY REWARD!",
@@ -1411,7 +2317,7 @@ async def hourly(ctx):
     )
     await ctx.send(embed=embed)
 
-# --- FARM, BEG, HUNT, WORK COMMANDS WITH NERFED REWARDS ---
+# --- DAILY COMMANDS ---
 @bot.command()
 async def beg(ctx):
     user_id = ctx.author.id
@@ -1555,8 +2461,6 @@ async def work(ctx):
 # --- GIFTING SYSTEM ---
 @bot.command()
 async def gift(ctx, member: discord.Member, amount: int):
-    """Gift petals to another player! Usage: b!gift @player <amount>"""
-    
     if member == ctx.author:
         return await ctx.send("❌ You can't gift petals to yourself!")
     
@@ -1592,6 +2496,7 @@ async def gift(ctx, member: discord.Member, amount: int):
     update_balance(member.id, amount)
     
     gift_cooldown[user_id] = (today, new_total)
+    save_all_data()
     
     embed = discord.Embed(
         title="🎁 GIFT SENT! 🎁",
@@ -1607,7 +2512,6 @@ async def gift(ctx, member: discord.Member, amount: int):
 
 @bot.command()
 async def giftstats(ctx):
-    """Check your daily gifting stats"""
     user_id = ctx.author.id
     today = datetime.now().date()
     
@@ -1642,30 +2546,6 @@ async def giftstats(ctx):
         embed.add_field(name="📅 Reset Time", value="Midnight UTC", inline=True)
         await ctx.send(embed=embed)
 
-@bot.command()
-async def reset_gift(ctx, user: discord.Member = None):
-    """Reset a user's daily gifting limit (Admin only)"""
-    if ctx.author.name not in ADMINS:
-        return await ctx.send("❌ You don't have permission to use this command!")
-    
-    target = user if user else ctx.author
-    
-    if target.id in gift_cooldown:
-        del gift_cooldown[target.id]
-        embed = discord.Embed(
-            title="✅ Gift Cooldown Reset!",
-            description=f"Reset daily gifting limit for {target.mention}",
-            color=0x00ff00
-        )
-        await ctx.send(embed=embed)
-    else:
-        embed = discord.Embed(
-            title="ℹ️ No Cooldown Found",
-            description=f"{target.mention} hasn't gifted any petals today!",
-            color=0xffa500
-        )
-        await ctx.send(embed=embed)
-
 # --- ADMIN COMMANDS ---
 @bot.command()
 async def gen(ctx, code: str, value: int, uses: int):
@@ -1674,6 +2554,7 @@ async def gen(ctx, code: str, value: int, uses: int):
         return await ctx.send(embed=embed)
     
     redeem_codes[code.upper()] = {"value": value, "uses": uses}
+    save_all_data()
     embed = discord.Embed(
         title="🎟️ Voucher Created!",
         description=f"**Code:** `{code.upper()}`\n**Value:** {value} petals\n**Uses:** {uses}",
@@ -1685,6 +2566,7 @@ async def gen(ctx, code: str, value: int, uses: int):
 @commands.has_permissions(administrator=True)
 async def setup(ctx):
     server_channels[ctx.guild.id] = ctx.channel.id
+    save_all_data()
     embed = discord.Embed(title="✅ Setup Complete!", description=f"Leaderboard updates to {ctx.channel.mention}", color=0x00ff00)
     await ctx.send(embed=embed)
 
@@ -1714,6 +2596,7 @@ async def reset_cooldowns(ctx, user: discord.Member = None):
     if target.id in work_cooldown:
         del work_cooldown[target.id]
     
+    save_all_data()
     embed = discord.Embed(
         title="✅ Cooldowns Reset!",
         description=f"Reset all daily command cooldowns for {target.mention}",
@@ -1721,6 +2604,153 @@ async def reset_cooldowns(ctx, user: discord.Member = None):
     )
     await ctx.send(embed=embed)
 
+@bot.command()
+async def reset_gift(ctx, user: discord.Member = None):
+    if ctx.author.name not in ADMINS:
+        return await ctx.send("❌ You don't have permission to use this command!")
+    
+    target = user if user else ctx.author
+    
+    if target.id in gift_cooldown:
+        del gift_cooldown[target.id]
+        save_all_data()
+        embed = discord.Embed(
+            title="✅ Gift Cooldown Reset!",
+            description=f"Reset daily gifting limit for {target.mention}",
+            color=0x00ff00
+        )
+        await ctx.send(embed=embed)
+    else:
+        embed = discord.Embed(
+            title="ℹ️ No Cooldown Found",
+            description=f"{target.mention} hasn't gifted any petals today!",
+            color=0xffa500
+        )
+        await ctx.send(embed=embed)
+
+@bot.command()
+async def add_item(ctx, member: discord.Member, item: str, quantity: int = 1):
+    if ctx.author.name not in ADMINS:
+        return await ctx.send("❌ You don't have permission to use this command!")
+    
+    item_id = None
+    for key, value in shop_items.items():
+        if value['name'].lower() == item.lower():
+            item_id = key
+            break
+    
+    if not item_id:
+        return await ctx.send(f"❌ Item '{item}' not found!")
+    
+    add_to_inventory(member.id, item_id, quantity)
+    embed = discord.Embed(
+        title="✅ Item Added!",
+        description=f"Added **{quantity}x {shop_items[item_id]['emoji']} {shop_items[item_id]['name']}** to {member.mention}",
+        color=0x00ff00
+    )
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def remove_item(ctx, member: discord.Member, item: str, quantity: int = 1):
+    if ctx.author.name not in ADMINS:
+        return await ctx.send("❌ You don't have permission to use this command!")
+    
+    item_id = None
+    for key, value in shop_items.items():
+        if value['name'].lower() == item.lower():
+            item_id = key
+            break
+    
+    if not item_id:
+        return await ctx.send(f"❌ Item '{item}' not found!")
+    
+    if has_item(member.id, item_id, quantity):
+        remove_from_inventory(member.id, item_id, quantity)
+        embed = discord.Embed(
+            title="✅ Item Removed!",
+            description=f"Removed **{quantity}x {shop_items[item_id]['emoji']} {shop_items[item_id]['name']}** from {member.mention}",
+            color=0x00ff00
+        )
+    else:
+        embed = discord.Embed(
+            title="❌ Not Enough Items!",
+            description=f"{member.mention} doesn't have {quantity}x {shop_items[item_id]['emoji']} {shop_items[item_id]['name']}!",
+            color=0xff0000
+        )
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def add_pet(ctx, member: discord.Member, pet_name: str):
+    if ctx.author.name not in ADMINS:
+        return await ctx.send("❌ You don't have permission to use this command!")
+    
+    pet_id = None
+    for key, value in pet_shop_items.items():
+        if value['name'].lower() == pet_name.lower():
+            pet_id = key
+            break
+    
+    if not pet_id:
+        return await ctx.send(f"❌ Pet '{pet_name}' not found!")
+    
+    if member.id not in player_pets:
+        player_pets[member.id] = {}
+    
+    if pet_id in player_pets[member.id]:
+        return await ctx.send(f"❌ {member.mention} already owns {pet_shop_items[pet_id]['emoji']} {pet_name}!")
+    
+    player_pets[member.id][pet_id] = {
+        "name": pet_shop_items[pet_id]['name'],
+        "level": 1,
+        "xp": 0,
+        "happiness": 100,
+        "last_fed": datetime.now(),
+        "last_played": datetime.now()
+    }
+    
+    save_all_data()
+    embed = discord.Embed(
+        title="✅ Pet Added!",
+        description=f"Added **{pet_shop_items[pet_id]['emoji']} {pet_name}** to {member.mention}",
+        color=0x00ff00
+    )
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def remove_pet(ctx, member: discord.Member, pet_name: str):
+    if ctx.author.name not in ADMINS:
+        return await ctx.send("❌ You don't have permission to use this command!")
+    
+    pet_id = None
+    for key, value in pet_shop_items.items():
+        if value['name'].lower() == pet_name.lower():
+            pet_id = key
+            break
+    
+    if not pet_id:
+        return await ctx.send(f"❌ Pet '{pet_name}' not found!")
+    
+    if member.id in player_pets and pet_id in player_pets[member.id]:
+        del player_pets[member.id][pet_id]
+        
+        if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
+            del pet_equipped[member.id]
+        
+        save_all_data()
+        embed = discord.Embed(
+            title="✅ Pet Removed!",
+            description=f"Removed **{pet_shop_items[pet_id]['emoji']} {pet_name}** from {member.mention}",
+            color=0x00ff00
+        )
+    else:
+        embed = discord.Embed(
+            title="❌ Pet Not Found!",
+            description=f"{member.mention} doesn't own {pet_name}!",
+            color=0xff0000
+        )
+    await ctx.send(embed=embed)
+
+# --- USER COMMANDS ---
 @bot.command()
 async def cooldowns(ctx):
     user_id = ctx.author.id
@@ -1757,7 +2787,6 @@ async def cooldowns(ctx):
     
     await ctx.send(embed=embed)
 
-# --- USER COMMANDS ---
 @bot.command()
 async def lb(ctx):
     if not economy:
@@ -1780,7 +2809,559 @@ async def bal(ctx):
     embed = discord.Embed(title=f"{rank_emoji} {ctx.author.display_name}'s Garden", description=f"**Petals:** `{balance}`", color=0xffb7c5)
     await ctx.send(embed=embed)
 
-# --- ALL GAME COMMANDS ---
+# --- INVENTORY AND SHOP COMMANDS ---
+@bot.command()
+async def shop(ctx, page: int = 1):
+    if page < 1:
+        page = 1
+    
+    view = ShopView(ctx, page - 1)
+    embed = view.create_shop_embed()
+    await ctx.send(embed=embed, view=view)
+
+@bot.command()
+async def inventory(ctx, member: discord.Member = None):
+    target = member if member else ctx.author
+    
+    inventory = get_inventory(target.id)
+    
+    if not inventory:
+        embed = discord.Embed(
+            title="🎒 Inventory",
+            description=f"{target.mention} doesn't have any items yet!",
+            color=0xffa500
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title=f"🎒 {target.display_name}'s Inventory",
+        description="Here are all the items they own:",
+        color=0x00ff88
+    )
+    
+    total_value = 0
+    for item_id, quantity in inventory.items():
+        if item_id in shop_items:
+            item_data = shop_items[item_id]
+            item_value = item_data['price'] * quantity
+            total_value += item_value
+            embed.add_field(
+                name=f"{item_data['emoji']} {item_data['name']} x{quantity}",
+                value=f"Value: {item_value:,} petals",
+                inline=False
+            )
+    
+    embed.set_footer(text=f"Total Inventory Value: {total_value:,} petals")
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def use(ctx, *, item: str):
+    item_id = None
+    
+    for key, value in shop_items.items():
+        if value['name'].lower() == item.lower():
+            item_id = key
+            break
+    
+    if not item_id:
+        return await ctx.send(f"❌ Item '{item}' not found! Check `b!inventory` to see your items")
+    
+    if not has_item(ctx.author.id, item_id):
+        return await ctx.send(f"❌ You don't have {shop_items[item_id]['emoji']} {shop_items[item_id]['name']}!")
+    
+    if item_id == "lucky_charm":
+        expiry = datetime.now() + timedelta(hours=24)
+        player_buffs[ctx.author.id] = {"luck": True, "expires": expiry}
+        remove_from_inventory(ctx.author.id, item_id)
+        
+        embed = discord.Embed(
+            title="🍀 Lucky Charm Activated!",
+            description=f"{ctx.author.mention} used a Lucky Charm!\nYou have 5% better odds in games for 24 hours!",
+            color=0x00ff00
+        )
+        embed.add_field(name="⏰ Expires", value=f"<t:{int(expiry.timestamp())}:R>", inline=False)
+        await ctx.send(embed=embed)
+    
+    elif item_id == "xp_boost":
+        expiry = datetime.now() + timedelta(hours=24)
+        player_buffs[ctx.author.id] = {"xp_boost": True, "expires": expiry}
+        remove_from_inventory(ctx.author.id, item_id)
+        
+        embed = discord.Embed(
+            title="⚡ XP Boost Activated!",
+            description=f"{ctx.author.mention} used an XP Boost!\nDaily rewards doubled for 24 hours!",
+            color=0x00ff00
+        )
+        embed.add_field(name="⏰ Expires", value=f"<t:{int(expiry.timestamp())}:R>", inline=False)
+        await ctx.send(embed=embed)
+    
+    elif item_id == "protection_amulet":
+        player_buffs[ctx.author.id] = player_buffs.get(ctx.author.id, {})
+        player_buffs[ctx.author.id]["protection"] = player_buffs[ctx.author.id].get("protection", 0) + 1
+        remove_from_inventory(ctx.author.id, item_id)
+        
+        embed = discord.Embed(
+            title="🛡️ Protection Amulet Activated!",
+            description=f"{ctx.author.mention} used a Protection Amulet!\nYou're protected from your next loss!",
+            color=0x00ff00
+        )
+        await ctx.send(embed=embed)
+    
+    elif item_id == "double_win":
+        player_buffs[ctx.author.id] = player_buffs.get(ctx.author.id, {})
+        player_buffs[ctx.author.id]["double_win"] = player_buffs[ctx.author.id].get("double_win", 0) + 1
+        remove_from_inventory(ctx.author.id, item_id)
+        
+        embed = discord.Embed(
+            title="🎰 Double Win Token Activated!",
+            description=f"{ctx.author.mention} used a Double Win Token!\nYour next win will be doubled!",
+            color=0x00ff00
+        )
+        await ctx.send(embed=embed)
+    
+    elif item_id == "mystery_box":
+        reward = random.choice([500, 1000, 2500, 5000, 10000, 25000])
+        update_balance(ctx.author.id, reward)
+        remove_from_inventory(ctx.author.id, item_id)
+        
+        embed = discord.Embed(
+            title="🎁 Mystery Box Opened! 🎁",
+            description=f"{ctx.author.mention} opened a mystery box and found **{reward:,} petals** inside!",
+            color=0x00ff00
+        )
+        await ctx.send(embed=embed)
+    
+    elif item_id == "bank_vault":
+        player_permanents[ctx.author.id] = player_permanents.get(ctx.author.id, {})
+        player_permanents[ctx.author.id]["bank_vault"] = True
+        remove_from_inventory(ctx.author.id, item_id)
+        
+        embed = discord.Embed(
+            title="🏦 Bank Vault Activated!",
+            description=f"{ctx.author.mention} unlocked a Bank Vault!\nYour daily gift limit is now **1,500,000** petals!",
+            color=0x00ff00
+        )
+        await ctx.send(embed=embed)
+    
+    else:
+        item_data = shop_items[item_id]
+        remove_from_inventory(ctx.author.id, item_id)
+        embed = discord.Embed(
+            title=f"{item_data['emoji']} Item Used!",
+            description=f"{ctx.author.mention} used {item_data['name']}!\n*You admire its beauty before it disappears...*",
+            color=0xff69b4
+        )
+        await ctx.send(embed=embed)
+    
+    save_all_data()
+
+@bot.command()
+async def buffs(ctx):
+    user_id = ctx.author.id
+    now = datetime.now()
+    
+    embed = discord.Embed(
+        title="✨ Your Active Buffs ✨",
+        color=0xff69b4
+    )
+    
+    has_buffs = False
+    
+    if user_id in player_buffs:
+        buffs = player_buffs[user_id]
+        
+        if "luck" in buffs and buffs["luck"]:
+            expiry = buffs.get("expires")
+            if expiry and expiry > now:
+                has_buffs = True
+                embed.add_field(name="🍀 Lucky Charm", value=f"5% better odds\nExpires: <t:{int(expiry.timestamp())}:R>", inline=False)
+            else:
+                del buffs["luck"]
+        
+        if "xp_boost" in buffs and buffs["xp_boost"]:
+            expiry = buffs.get("expires")
+            if expiry and expiry > now:
+                has_buffs = True
+                embed.add_field(name="⚡ XP Boost", value=f"Doubled daily rewards\nExpires: <t:{int(expiry.timestamp())}:R>", inline=False)
+            else:
+                del buffs["xp_boost"]
+        
+        if "protection" in buffs and buffs["protection"] > 0:
+            has_buffs = True
+            embed.add_field(name="🛡️ Protection Amulets", value=f"{buffs['protection']} remaining\nProtects from your next loss(es)", inline=False)
+        
+        if "double_win" in buffs and buffs["double_win"] > 0:
+            has_buffs = True
+            embed.add_field(name="🎰 Double Win Tokens", value=f"{buffs['double_win']} remaining\nDoubles your next win(s)", inline=False)
+    
+    if user_id in player_permanents:
+        perms = player_permanents[user_id]
+        if "bank_vault" in perms and perms["bank_vault"]:
+            has_buffs = True
+            embed.add_field(name="🏦 Bank Vault", value="Daily gift limit: **1,500,000** petals (up from 1,000,000)", inline=False)
+    
+    if not has_buffs:
+        embed.description = "You have no active buffs! Visit the shop with `b!shop` to buy some!"
+    else:
+        embed.set_footer(text="Use items with b!use <item name>")
+    
+    await ctx.send(embed=embed)
+
+# --- PET COMMANDS ---
+@bot.command()
+async def petshop(ctx, page: int = 1):
+    if page < 1:
+        page = 1
+    
+    view = PetShopView(ctx, page - 1)
+    embed = view.create_shop_embed()
+    await ctx.send(embed=embed, view=view)
+
+@bot.command()
+async def mypets(ctx):
+    user_id = ctx.author.id
+    
+    if user_id not in player_pets or not player_pets[user_id]:
+        embed = discord.Embed(
+            title="🐾 Your Pets",
+            description="You don't have any pets yet! Visit the pet shop with `b!petshop` to adopt one!",
+            color=0xffa500
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title=f"🐾 {ctx.author.display_name}'s Pets",
+        description="Here are all your magical companions:",
+        color=0x00ff88
+    )
+    
+    for pet_id, pet in player_pets[user_id].items():
+        pet_data = pet_shop_items[pet_id]
+        equipped = "✅ **EQUIPPED**" if user_id in pet_equipped and pet_equipped[user_id] == pet_id else ""
+        
+        happiness_bar = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet["happiness"] // 10))
+        xp_needed = pet_data['xp_per_level'] * pet['level']
+        
+        embed.add_field(
+            name=f"{pet_data['emoji']} {pet.get('name', pet_data['name'])} {equipped}",
+            value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{xp_needed:,}\n**Happiness:** {happiness_bar} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals",
+            inline=False
+        )
+    
+    embed.set_footer(text="Use b!pet <name> to interact | b!pet equip <name> | b!pet rename <name> <new name>")
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def pet(ctx, action: str = None, *, name: str = None):
+    user_id = ctx.author.id
+    
+    if user_id not in pet_equipped:
+        if user_id in player_pets and player_pets[user_id]:
+            first_pet = list(player_pets[user_id].keys())[0]
+            pet_equipped[user_id] = first_pet
+            save_all_data()
+        else:
+            return await ctx.send("❌ You don't have any pets! Visit `b!petshop` to adopt one!")
+    
+    if action is None:
+        pet_id = pet_equipped[user_id]
+        pet = player_pets[user_id][pet_id]
+        pet_data = pet_shop_items[pet_id]
+        
+        happiness_bar = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet["happiness"] // 10))
+        xp_needed = pet_data['xp_per_level'] * pet['level']
+        xp_bar_length = 20
+        xp_filled = int((pet["xp"] / xp_needed) * xp_bar_length) if xp_needed > 0 else xp_bar_length
+        xp_bar = "🟢" * min(xp_filled, xp_bar_length) + "⚫" * max(0, xp_bar_length - xp_filled)
+        
+        embed = discord.Embed(
+            title=f"🐾 Your Active Pet: {pet_data['emoji']} {pet.get('name', pet_data['name'])}",
+            description=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{xp_needed:,}\n{xp_bar}\n**Happiness:** {happiness_bar} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals",
+            color=0xff69b4
+        )
+        embed.add_field(name="📋 Actions", value="• `b!pet feed` - Feed your pet\n• `b!pet play` - Play with your pet\n• `b!pet collect` - Collect daily reward\n• `b!pet equip <name>` - Equip a different pet\n• `b!pet rename <name>` - Rename your pet", inline=False)
+        embed.set_footer(text="Happy pets give better rewards! Keep them happy!")
+        
+        await ctx.send(embed=embed)
+    
+    elif action.lower() == "equip":
+        if not name:
+            return await ctx.send("❌ Please specify which pet to equip! Example: `b!pet equip \"Garden Cat\"`")
+        
+        found_pet = None
+        found_pet_id = None
+        
+        for pet_id, pet in player_pets[user_id].items():
+            pet_data = pet_shop_items[pet_id]
+            if pet.get('name', pet_data['name']).lower() == name.lower():
+                found_pet = pet
+                found_pet_id = pet_id
+                break
+        
+        if found_pet:
+            pet_equipped[user_id] = found_pet_id
+            save_all_data()
+            pet_data = pet_shop_items[found_pet_id]
+            await ctx.send(f"✅ You equipped **{pet_data['emoji']} {found_pet.get('name', pet_data['name'])}** as your active pet!")
+        else:
+            await ctx.send(f"❌ Could not find a pet named '{name}'!")
+    
+    elif action.lower() == "rename":
+        if not name:
+            return await ctx.send("❌ Please specify a new name! Example: `b!pet rename Fluffy`")
+        
+        if len(name) > 20:
+            return await ctx.send("❌ Pet name must be 20 characters or less!")
+        
+        pet_id = pet_equipped[user_id]
+        old_name = player_pets[user_id][pet_id].get('name', pet_shop_items[pet_id]['name'])
+        player_pets[user_id][pet_id]['name'] = name
+        save_all_data()
+        
+        await ctx.send(f"✅ Your pet **{old_name}** has been renamed to **{name}**!")
+    
+    elif action.lower() == "feed":
+        pet_id = pet_equipped[user_id]
+        pet = player_pets[user_id][pet_id]
+        pet_data = pet_shop_items[pet_id]
+        
+        on_cooldown, remaining = check_cooldown(pet_feed_cooldown, user_id, 1800)
+        if on_cooldown:
+            time_str = format_time(remaining)
+            return await ctx.send(f"⏰ Your pet is still full! Come back in **{time_str}**")
+        
+        old_happiness = pet["happiness"]
+        pet["happiness"] = min(100, pet["happiness"] + 20)
+        pet["last_fed"] = datetime.now()
+        set_cooldown(pet_feed_cooldown, user_id)
+        
+        pet["xp"] += 50
+        
+        leveled_up = False
+        xp_needed = pet_data['xp_per_level'] * pet['level']
+        while pet["xp"] >= xp_needed and pet["level"] < pet_data["max_level"]:
+            pet["xp"] -= xp_needed
+            pet["level"] += 1
+            leveled_up = True
+            xp_needed = pet_data['xp_per_level'] * pet['level']
+        
+        embed = discord.Embed(
+            title=f"🍖 Feeding {pet_data['emoji']} {pet.get('name', pet_data['name'])}",
+            description=f"You fed your pet! Happiness increased from {old_happiness}% to {pet['happiness']}%! +50 XP",
+            color=0x00ff00
+        )
+        
+        if leveled_up:
+            embed.add_field(name="🎉 LEVEL UP! 🎉", value=f"Your pet reached level {pet['level']}!", inline=False)
+        
+        save_all_data()
+        await ctx.send(embed=embed)
+    
+    elif action.lower() == "play":
+        pet_id = pet_equipped[user_id]
+        pet = player_pets[user_id][pet_id]
+        pet_data = pet_shop_items[pet_id]
+        
+        on_cooldown, remaining = check_cooldown(pet_play_cooldown, user_id, 3600)
+        if on_cooldown:
+            time_str = format_time(remaining)
+            return await ctx.send(f"⏰ Your pet is tired from playing! Come back in **{time_str}**")
+        
+        old_happiness = pet["happiness"]
+        pet["happiness"] = min(100, pet["happiness"] + 15)
+        pet["last_played"] = datetime.now()
+        set_cooldown(pet_play_cooldown, user_id)
+        
+        pet["xp"] += 75
+        
+        leveled_up = False
+        xp_needed = pet_data['xp_per_level'] * pet['level']
+        while pet["xp"] >= xp_needed and pet["level"] < pet_data["max_level"]:
+            pet["xp"] -= xp_needed
+            pet["level"] += 1
+            leveled_up = True
+            xp_needed = pet_data['xp_per_level'] * pet['level']
+        
+        embed = discord.Embed(
+            title=f"🎾 Playing with {pet_data['emoji']} {pet.get('name', pet_data['name'])}",
+            description=f"You played with your pet! Happiness increased from {old_happiness}% to {pet['happiness']}%! +75 XP",
+            color=0x00ff00
+        )
+        
+        if leveled_up:
+            embed.add_field(name="🎉 LEVEL UP! 🎉", value=f"Your pet reached level {pet['level']}!", inline=False)
+        
+        save_all_data()
+        await ctx.send(embed=embed)
+    
+    elif action.lower() == "collect":
+        pet_id = pet_equipped[user_id]
+        pet = player_pets[user_id][pet_id]
+        pet_data = pet_shop_items[pet_id]
+        
+        now = datetime.now()
+        if user_id in pet_cooldown and (now - pet_cooldown[user_id]).total_seconds() < 86400:
+            remaining = 86400 - (now - pet_cooldown[user_id]).total_seconds()
+            hours = int(remaining // 3600)
+            minutes = int((remaining % 3600) // 60)
+            return await ctx.send(f"⏰ You already collected your pet's daily reward! Come back in {hours}h {minutes}m!")
+        
+        base_reward = pet_data['daily_reward']
+        level_bonus = int(base_reward * (pet['level'] / 100))
+        happiness_bonus = int(base_reward * (pet['happiness'] / 200))
+        reward = base_reward + level_bonus + happiness_bonus
+        
+        update_balance(user_id, reward)
+        pet_cooldown[user_id] = now
+        
+        pet["xp"] += 25
+        
+        leveled_up = False
+        xp_needed = pet_data['xp_per_level'] * pet['level']
+        while pet["xp"] >= xp_needed and pet["level"] < pet_data["max_level"]:
+            pet["xp"] -= xp_needed
+            pet["level"] += 1
+            leveled_up = True
+            xp_needed = pet_data['xp_per_level'] * pet['level']
+        
+        embed = discord.Embed(
+            title=f"💰 Daily Reward from {pet_data['emoji']} {pet.get('name', pet_data['name'])}",
+            description=f"Your pet gave you **{reward:,} petals**! +25 XP",
+            color=0x00ff00
+        )
+        
+        if leveled_up:
+            embed.add_field(name="🎉 LEVEL UP! 🎉", value=f"Your pet reached level {pet['level']}!", inline=False)
+        
+        embed.add_field(name="📊 New Balance", value=f"{get_balance(user_id):,} petals", inline=False)
+        
+        save_all_data()
+        await ctx.send(embed=embed)
+    
+    else:
+        await ctx.send("❌ Invalid action! Use: `feed`, `play`, `collect`, `equip`, or `rename`")
+
+@bot.command()
+async def petstats(ctx, member: discord.Member = None):
+    target = member if member else ctx.author
+    user_id = target.id
+    
+    if user_id not in pet_equipped:
+        if user_id in player_pets and player_pets[user_id]:
+            first_pet = list(player_pets[user_id].keys())[0]
+            pet_equipped[user_id] = first_pet
+            save_all_data()
+        else:
+            return await ctx.send(f"❌ {target.mention} doesn't have any pets yet!")
+    
+    pet_id = pet_equipped[user_id]
+    pet = player_pets[user_id][pet_id]
+    pet_data = pet_shop_items[pet_id]
+    
+    happiness_bar = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet["happiness"] // 10))
+    xp_needed = pet_data['xp_per_level'] * pet['level']
+    xp_bar_length = 20
+    xp_filled = int((pet["xp"] / xp_needed) * xp_bar_length) if xp_needed > 0 else xp_bar_length
+    xp_bar = "🟢" * min(xp_filled, xp_bar_length) + "⚫" * max(0, xp_bar_length - xp_filled)
+    
+    embed = discord.Embed(
+        title=f"🐾 {target.display_name}'s Pet",
+        description=f"{pet_data['emoji']} **{pet.get('name', pet_data['name'])}** [{pet_data['rarity'].title()}]",
+        color=0xff69b4
+    )
+    embed.add_field(name="📊 Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{xp_needed:,}\n{xp_bar}\n**Happiness:** {happiness_bar} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals", inline=False)
+    
+    await ctx.send(embed=embed)
+
+# --- GAME COMMANDS ---
+@bot.command()
+async def blackjack(ctx, bet: int):
+    if get_balance(ctx.author.id) < bet or bet <= 0:
+        return await ctx.send("❌ Not enough petals!")
+    
+    p = [random.randint(1, 11), random.randint(1, 11)]
+    d = [random.randint(1, 11), random.randint(1, 11)]
+    
+    embed = discord.Embed(title="🃏 BLACKJACK", description=f"**Your hand:** {p} = **{sum(p)}**\n**Dealer shows:** [{d[0]}, ?]\n\nType `hit` or `stand`!", color=0xff69b4)
+    await ctx.send(embed=embed)
+    
+    def check(m): 
+        return m.author == ctx.author and m.content.lower() in ['hit', 'stand']
+    
+    try:
+        while sum(p) < 21:
+            msg = await bot.wait_for('message', check=check, timeout=20)
+            if msg.content.lower() == 'hit':
+                p.append(random.randint(1, 11))
+                if sum(p) > 21:
+                    break
+                embed = discord.Embed(title="🃏 BLACKJACK", description=f"**Your hand:** {p} = **{sum(p)}**\nType `hit` or `stand`!", color=0xff69b4)
+                await ctx.send(embed=embed)
+            else:
+                break
+    except:
+        pass
+    
+    pt, dt = sum(p), sum(d)
+    while dt < 17:
+        d.append(random.randint(1, 11))
+        dt = sum(d)
+    
+    if pt > 21:
+        update_balance(ctx.author.id, -bet)
+        result = "💥 BUST! You went over 21!"
+        color = 0xff0000
+    elif dt > 21:
+        win = int(bet * 0.95)
+        update_balance(ctx.author.id, win)
+        result = f"🎉 WIN! Dealer busted! You won {win} petals!"
+        color = 0x00ff00
+    elif pt > dt:
+        win = int(bet * 0.95)
+        update_balance(ctx.author.id, win)
+        result = f"🎉 WIN! You beat the dealer! You won {win} petals!"
+        color = 0x00ff00
+    elif pt <= dt:
+        update_balance(ctx.author.id, -bet)
+        result = "💔 LOSS! The dealer wins!"
+        color = 0xff0000
+    
+    embed = discord.Embed(title="🃏 GAME RESULT", description=f"**Your hand:** {p} = **{pt}**\n**Dealer hand:** {d} = **{dt}**\n\n{result}", color=color)
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def rps(ctx, choice: str, bet: int):
+    if get_balance(ctx.author.id) < bet:
+        return await ctx.send("❌ Not enough petals!")
+    
+    valid_choices = ["rock", "paper", "scissors"]
+    user_choice = choice.lower()
+    
+    if user_choice not in valid_choices:
+        return await ctx.send("❌ Invalid choice! Choose: `rock`, `paper`, or `scissors`")
+    
+    bot_choice = random.choice(valid_choices)
+    choice_emojis = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
+    
+    if user_choice == bot_choice:
+        update_balance(ctx.author.id, -bet)
+        result = f"💔 TIE GOES TO HOUSE! -{bet} petals!"
+        color = 0xff0000
+    elif (user_choice == "rock" and bot_choice == "scissors") or (user_choice == "paper" and bot_choice == "rock") or (user_choice == "scissors" and bot_choice == "paper"):
+        win = int(bet * 0.9)
+        update_balance(ctx.author.id, win)
+        result = f"🎉 WIN! +{win} petals!"
+        color = 0x00ff00
+    else:
+        update_balance(ctx.author.id, -bet)
+        result = f"💔 LOSS! -{bet} petals!"
+        color = 0xff0000
+    
+    embed = discord.Embed(title="✂️ RPS", description=f"**You:** {choice_emojis[user_choice]} {user_choice}\n**Bot:** {choice_emojis[bot_choice]} {bot_choice}\n\n{result}", color=color)
+    await ctx.send(embed=embed)
+
 @bot.command()
 async def crash(ctx, bet: int):
     if get_balance(ctx.author.id) < bet or bet <= 0:
@@ -1837,8 +3418,26 @@ async def higherlower(ctx, bet: int):
     if get_balance(ctx.author.id) < bet or bet <= 0:
         return await ctx.send("❌ Not enough petals!")
     
-    embed = discord.Embed(title="🎴 HIGHER OR LOWER", description=f"**Bet:** {bet} petals\nWill the next card be higher or lower?", color=0xffa500)
-    await ctx.send(embed=embed, view=HigherLowerView(ctx, bet))
+    card_names = {1:"A", 11:"J", 12:"Q", 13:"K"}
+    current_card = random.randint(1, 13)
+    current_display = card_names.get(current_card, str(current_card))
+    
+    card_emojis = {
+        1: "🃏", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 
+        6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟",
+        11: "👑", 12: "👸", 13: "🤴"
+    }
+    current_emoji = card_emojis.get(current_card, "🎴")
+    
+    embed = discord.Embed(
+        title="🎴 HIGHER OR LOWER 🎴", 
+        description=f"**Your Card:** {current_emoji} **{current_display}**\n\n**💰 Bet:** {bet} petals\n\n⬆️ Will the next card be **HIGHER** or **LOWER**? ⬇️\n\n*Click a button to guess!*",
+        color=0xffa500
+    )
+    embed.set_footer(text="Aces are low (1), Kings are high (13)")
+    
+    view = HigherLowerView(ctx, bet, current_card, current_display, current_emoji)
+    await ctx.send(embed=embed, view=view)
 
 @bot.command()
 async def roulette(ctx, bet: int):
@@ -1903,13 +3502,7 @@ async def poker(ctx, bet: int):
     await ctx.send(embed=embed, view=PokerView(ctx, bet))
 
 @bot.command()
-async def redeem(ctx):
-    embed = discord.Embed(title="🎟️ Redeem Voucher", description="Click below to redeem a voucher!", color=0xff69b4)
-    await ctx.send(embed=embed, view=RedeemStarterView())
-
-@bot.command()
 async def duel(ctx, opponent: discord.Member, bet: int):
-    """Challenge another player to a duel! Usage: b!duel @player <amount>"""
     if opponent == ctx.author:
         return await ctx.send("❌ You can't duel yourself!")
     
@@ -1936,16 +3529,23 @@ async def duel(ctx, opponent: discord.Member, bet: int):
     await ctx.send(embed=embed, view=view)
 
 @bot.command()
+async def redeem(ctx):
+    embed = discord.Embed(title="🎟️ Redeem Voucher", description="Click below to redeem a voucher!", color=0xff69b4)
+    await ctx.send(embed=embed, view=RedeemStarterView())
+
+@bot.command()
 async def help(ctx):
     embed = discord.Embed(title="🌸 Blossom Garden - Help Menu", description="Here's everything you can do:", color=0xffb7c5)
     
     embed.add_field(name="🌱 **Daily Earnings**", value="`beg`, `farm`, `hunt`, `work` - Each once per day!\n`daily`, `weekly`, `hourly` - Time-based rewards!", inline=False)
+    embed.add_field(name="🐾 **Pets**", value="`petshop` - Adopt magical pets (1M - 250M petals)\n`mypets` - View your pets\n`pet` - Interact with your pet (feed/play/collect)\n`petstats` - View pet stats", inline=False)
+    embed.add_field(name="🛒 **Shop & Items**", value="`shop` - Browse and buy items\n`inventory` - Check your items\n`use <item>` - Use an item\n`buffs` - Check active buffs", inline=False)
     embed.add_field(name="🎁 **Gifting**", value="`gift @player <amount>` - Gift petals to friends!\n`giftstats` - Check your daily gifting limit\n*(Max 1,000,000 petals per day)*", inline=False)
     embed.add_field(name="⚔️ **PvP Game**", value="`duel @player <amount>` - Challenge other players to a duel!", inline=False)
     embed.add_field(name="🎲 **Casino Games**", value="`crash`, `mines`, `color`, `blackjack`, `dice`, `rps`, `slots`, `coinflip`, `higherlower`, `roulette`, `tower`, `scratch`, `treasure`, `roulettegun`, `race`, `poker`", inline=False)
     embed.add_field(name="ℹ️ **Info**", value="`bal` - Check balance\n`lb` - Leaderboard\n`cooldowns` - Check daily command status", inline=False)
-    embed.add_field(name="🎟️ **Admin**", value="`gen`, `setup`, `give`, `reset_cooldowns`, `reset_gift`", inline=False)
-    embed.set_footer(text="🌸 All games have been balanced for fair play! Duel your friends for big wins! 🌸")
+    embed.add_field(name="🎟️ **Admin**", value="`gen`, `setup`, `give`, `reset_cooldowns`, `reset_gift`, `add_item`, `remove_item`, `add_pet`, `remove_pet`", inline=False)
+    embed.set_footer(text="🌸 All data is saved permanently with MongoDB! Adopt pets for daily rewards! 🌸")
     await ctx.send(embed=embed)
 
 # --- ADMIN MANAGEMENT ---
@@ -1966,6 +3566,22 @@ async def remove_admin(ctx, username: str):
 @bot.command()
 async def admins(ctx):
     await ctx.send(f"👑 **Admins:** {', '.join(ADMINS)}")
+
+# --- START THE BOT ---
+@bot.event
+async def on_ready():
+    print(f'🌸 {bot.user} is fully loaded!')
+    print(f'📊 Serving {len(bot.guilds)} servers')
+    print(f'👑 Admins: {", ".join(ADMINS)}')
+    print(f'💾 Database mode: {"MongoDB Atlas" if USE_MONGODB else "Local File"}')
+    
+    # Start auto-save task
+    bot.loop.create_task(auto_save())
+    
+    if not hourly_leaderboard.is_running(): 
+        hourly_leaderboard.start()
+
+DAILY_GIFT_LIMIT = 1000000
 
 keep_alive()
 bot.run(TOKEN)
