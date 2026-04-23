@@ -249,7 +249,6 @@ def load_all_data():
     
     if USE_MONGODB:
         try:
-            # Load from MongoDB
             eco_data = db.economy.find_one({'_id': 'economy'})
             if eco_data:
                 economy = {int(k): v for k, v in eco_data.get('data', {}).items()}
@@ -906,7 +905,7 @@ class ConfirmPetView(View):
         await interaction.response.edit_message(content="Adoption cancelled!", embed=None, view=None)
         self.stop()
 
-# --- SIMPLIFIED GAME VIEWS (No timeout issues) ---
+# --- GAME VIEWS ---
 
 class CrashView(View):
     def __init__(self, ctx, bet):
@@ -1093,15 +1092,541 @@ class RouletteView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
+# --- MINES GAME ---
+class MinesButton(Button):
+    def __init__(self, num):
+        super().__init__(label="🌸", style=discord.ButtonStyle.secondary, row=(num-1)//3, emoji="🌸")
+        self.num = num
+    
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if interaction.user != view.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        if self.num in view.bombs:
+            view.stop()
+            update_balance(view.ctx.author.id, -view.bet)
+            for c in view.children:
+                if hasattr(c, 'num') and c.num in view.bombs:
+                    c.style, c.label, c.emoji = discord.ButtonStyle.danger, "💣", None
+                elif hasattr(c, 'num'):
+                    c.style, c.disabled = discord.ButtonStyle.secondary, True
+                else:
+                    c.disabled = True
+            
+            embed = discord.Embed(title="💥 BOOM!", description=f"You stepped on a bomb! Lost {view.bet} petals!", color=0xff0000)
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            view.revealed += 1
+            self.style, self.label, self.disabled, self.emoji = discord.ButtonStyle.success, "🍃", True, None
+            
+            mult = round(1.15 ** view.revealed, 2)
+            val = int(view.bet * mult)
+            
+            async def co(i):
+                view.stop()
+                update_balance(view.ctx.author.id, val - view.bet)
+                for c in view.children:
+                    c.disabled = True
+                embed = discord.Embed(title="💰 Cashout!", description=f"You won {val} petals!", color=0x00ff00)
+                await i.response.edit_message(embed=embed, view=view)
+            
+            btn = discord.utils.get(view.children, label="💰 Cashout")
+            if not btn:
+                btn = Button(label="💰 Cashout", style=discord.ButtonStyle.primary, emoji="💎", row=3)
+                btn.callback = co
+                view.add_item(btn)
+            
+            embed = discord.Embed(title="🌸 Minesweeper", description=f"Safe tiles: {view.revealed}\nMultiplier: {mult}x\nPotential win: {val} petals", color=0x00ff88)
+            await interaction.response.edit_message(embed=embed, view=view)
+
+class MinesView(View):
+    def __init__(self, ctx, bet, bombs):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.bet = bet
+        self.bombs = bombs
+        self.revealed = 0
+        for i in range(1, 10):
+            self.add_item(MinesButton(i))
+
+# --- COLOR GAME ---
+class ColorButton(Button):
+    def __init__(self, name, emoji, style_color):
+        super().__init__(label=name, emoji=emoji, style=style_color)
+        self.color_name = name
+    
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        if interaction.user != view.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        view.stop()
+        colors = ["🟡 Yellow", "🔴 Red", "⚪ White", "🟢 Green", "🌸 Pink", "🔵 Blue"]
+        rolled = [random.choice(colors) for _ in range(3)]
+        hits = rolled.count(f"{self.emoji} {self.color_name}")
+        
+        for c in view.children:
+            c.disabled = True
+        
+        result_display = " 🎲 ".join(rolled)
+        
+        if hits > 0:
+            win = view.bet * hits
+            update_balance(view.ctx.author.id, win - view.bet)
+            embed = discord.Embed(title="🎉 Victory!", description=f"Result: {result_display}\nGuessed {self.color_name} - appeared {hits} times!\nYou won {win} petals!", color=0x00ff00)
+        else:
+            update_balance(view.ctx.author.id, -view.bet)
+            embed = discord.Embed(title="💔 Defeat", description=f"Result: {result_display}\nGuessed {self.color_name} - didn't appear!\nYou lost {view.bet} petals!", color=0xff0000)
+        
+        await interaction.response.edit_message(embed=embed, view=view)
+
+class ColorView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.bet = bet
+        
+        color_configs = [
+            ("Yellow", "🟡", discord.ButtonStyle.primary),
+            ("Red", "🔴", discord.ButtonStyle.danger),
+            ("White", "⚪", discord.ButtonStyle.secondary),
+            ("Green", "🟢", discord.ButtonStyle.success),
+            ("Pink", "🌸", discord.ButtonStyle.primary),
+            ("Blue", "🔵", discord.ButtonStyle.primary)
+        ]
+        
+        for name, emoji, style in color_configs:
+            self.add_item(ColorButton(name, emoji, style))
+
+# --- HIGHER LOWER GAME ---
+class HigherLowerView(View):
+    def __init__(self, ctx, bet, current_card, card_display, card_emoji):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.bet = bet
+        self.current_card = current_card
+        self.card_display = card_display
+        self.card_emoji = card_emoji
+        self.game_active = True
+    
+    @discord.ui.button(label="⬆️ HIGHER", style=discord.ButtonStyle.success, emoji="⬆️")
+    async def higher(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.guess(interaction, "higher")
+    
+    @discord.ui.button(label="⬇️ LOWER", style=discord.ButtonStyle.danger, emoji="⬇️")
+    async def lower(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.guess(interaction, "lower")
+    
+    async def guess(self, interaction: discord.Interaction, choice):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        if not self.game_active:
+            return
+        
+        next_card = random.randint(1, 13)
+        card_names = {1:"A", 11:"J", 12:"Q", 13:"K"}
+        next_display = card_names.get(next_card, str(next_card))
+        
+        card_emojis = {
+            1: "🃏", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣",
+            6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟",
+            11: "👑", 12: "👸", 13: "🤴"
+        }
+        next_emoji = card_emojis.get(next_card, "🎴")
+        
+        current_card_visual = f"{self.card_emoji} **{self.card_display}**"
+        next_card_visual = f"{next_emoji} **{next_display}**"
+        
+        if (choice == "higher" and next_card > self.current_card) or (choice == "lower" and next_card < self.current_card):
+            win = int(self.bet * 1.8)
+            update_balance(self.ctx.author.id, win - self.bet)
+            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}\n\n{choice.upper()} was correct! You won {win} petals!", color=0x00ff00)
+        elif next_card == self.current_card:
+            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}\n\nTie! Bet returned!", color=0xffa500)
+        else:
+            update_balance(self.ctx.author.id, -self.bet)
+            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}\n\n{choice.upper()} was wrong! You lost {self.bet} petals!", color=0xff0000)
+        
+        self.game_active = False
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+# --- TOWER CLIMB GAME ---
+class TowerView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.bet = bet
+        self.floor = 1
+        self.multiplier = 1.0
+        self.update_display()
+    
+    def update_display(self):
+        self.multiplier = round(1.1 ** self.floor, 2)
+    
+    @discord.ui.button(label="⬆️ CLIMB", style=discord.ButtonStyle.success, emoji="⬆️")
+    async def climb(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        if random.random() < 0.4:
+            update_balance(self.ctx.author.id, -self.bet)
+            embed = discord.Embed(title="🏰 Tower Climb", description=f"You fell from floor {self.floor}! Lost {self.bet} petals!", color=0xff0000)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        else:
+            self.floor += 1
+            self.update_display()
+            potential_win = int(self.bet * self.multiplier)
+            embed = discord.Embed(title="🏰 Tower Climb", description=f"You reached floor {self.floor}!\nMultiplier: {self.multiplier}x\nPotential win: {potential_win} petals\n\nClick CASHOUT or CLIMB higher!", color=0xffa500)
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label="💰 CASHOUT", style=discord.ButtonStyle.primary, emoji="💰")
+    async def cashout(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        win = int(self.bet * self.multiplier)
+        update_balance(self.ctx.author.id, win - self.bet)
+        embed = discord.Embed(title="🏰 Tower Climb", description=f"You cashed out at floor {self.floor} and won {win} petals!", color=0x00ff00)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+# --- SCRATCH CARD GAME ---
+class ScratchView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.bet = bet
+        self.revealed = [False, False, False]
+        self.values = [random.randint(1, 10) for _ in range(3)]
+    
+    @discord.ui.button(label="❓", style=discord.ButtonStyle.secondary, emoji="🎫", row=0)
+    async def scratch1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.reveal(interaction, 0, button)
+    
+    @discord.ui.button(label="❓", style=discord.ButtonStyle.secondary, emoji="🎫", row=0)
+    async def scratch2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.reveal(interaction, 1, button)
+    
+    @discord.ui.button(label="❓", style=discord.ButtonStyle.secondary, emoji="🎫", row=0)
+    async def scratch3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.reveal(interaction, 2, button)
+    
+    async def reveal(self, interaction: discord.Interaction, index, button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        if self.revealed[index]:
+            return
+        
+        self.revealed[index] = True
+        button.label = str(self.values[index])
+        button.disabled = True
+        
+        if all(self.revealed):
+            if self.values[0] == self.values[1] == self.values[2]:
+                win = self.bet * 3
+                update_balance(self.ctx.author.id, win - self.bet)
+                embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}\n\nJACKPOT! You won {win} petals!", color=0x00ff00)
+            elif self.values[0] == self.values[1] or self.values[1] == self.values[2] or self.values[0] == self.values[2]:
+                win = int(self.bet * 1.5)
+                update_balance(self.ctx.author.id, win - self.bet)
+                embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}\n\nMATCH! You won {win} petals!", color=0xffa500)
+            else:
+                update_balance(self.ctx.author.id, -self.bet)
+                embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}\n\nNo match! You lost {self.bet} petals!", color=0xff0000)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        else:
+            remaining = 3 - sum(self.revealed)
+            await interaction.response.edit_message(content=f"Scratched {self.values[index]}! {remaining} left!", view=self)
+
+# --- TREASURE HUNT GAME ---
+class TreasureHuntView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.bet = bet
+        self.treasure_position = random.randint(1, 6)
+        self.attempts = 0
+        self.max_attempts = 2
+    
+    @discord.ui.button(label="📍 1", style=discord.ButtonStyle.secondary, row=0)
+    async def spot1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 1, button)
+    
+    @discord.ui.button(label="📍 2", style=discord.ButtonStyle.secondary, row=0)
+    async def spot2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 2, button)
+    
+    @discord.ui.button(label="📍 3", style=discord.ButtonStyle.secondary, row=0)
+    async def spot3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 3, button)
+    
+    @discord.ui.button(label="📍 4", style=discord.ButtonStyle.secondary, row=1)
+    async def spot4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 4, button)
+    
+    @discord.ui.button(label="📍 5", style=discord.ButtonStyle.secondary, row=1)
+    async def spot5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 5, button)
+    
+    @discord.ui.button(label="📍 6", style=discord.ButtonStyle.secondary, row=1)
+    async def spot6(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 6, button)
+    
+    async def hunt(self, interaction: discord.Interaction, spot, button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        if self.attempts >= self.max_attempts:
+            return
+        
+        self.attempts += 1
+        if spot == self.treasure_position:
+            win = int(self.bet * 2.5)
+            update_balance(self.ctx.author.id, win - self.bet)
+            embed = discord.Embed(title="💎 Treasure Hunt", description=f"You found the treasure at spot {spot}! You won {win} petals!", color=0x00ff00)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        elif self.attempts >= self.max_attempts:
+            update_balance(self.ctx.author.id, -self.bet)
+            embed = discord.Embed(title="💎 Treasure Hunt", description=f"You didn't find the treasure! It was at spot {self.treasure_position}. You lost {self.bet} petals!", color=0xff0000)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        else:
+            button.disabled = True
+            remaining = self.max_attempts - self.attempts
+            await interaction.response.edit_message(content=f"Nothing at spot {spot}! {remaining} attempt(s) left!", view=self)
+
+# --- RUSSIAN ROULETTE (3 Bullets) ---
+class RussianRouletteView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.bet = bet
+        chambers = [False] * 6
+        bullet_positions = random.sample(range(6), 3)
+        for pos in bullet_positions:
+            chambers[pos] = True
+        self.chambers = chambers
+        self.current_chamber = 0
+        self.spins = 0
+        self.max_spins = 3
+    
+    @discord.ui.button(label="🔫 PULL TRIGGER", style=discord.ButtonStyle.danger, emoji="🔫", row=0)
+    async def pull(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        self.spins += 1
+        
+        if self.chambers[self.current_chamber]:
+            update_balance(self.ctx.author.id, -self.bet)
+            embed = discord.Embed(title="💀 RUSSIAN ROULETTE", description=f"BANG! Chamber {self.current_chamber + 1} had a bullet! You lost {self.bet} petals!", color=0xff0000)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+            return
+        
+        self.current_chamber += 1
+        remaining_bullets = sum(self.chambers[self.current_chamber:])
+        
+        if self.spins >= self.max_spins:
+            win = self.bet * 3
+            update_balance(self.ctx.author.id, win - self.bet)
+            embed = discord.Embed(title="🔫 RUSSIAN ROULETTE", description=f"You survived {self.max_spins} pulls! You won {win} petals!", color=0x00ff00)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+            return
+        
+        remaining_pulls = self.max_spins - self.spins
+        embed = discord.Embed(title="🔫 RUSSIAN ROULETTE", description=f"Click! Chamber {self.current_chamber} was empty!\n{remaining_bullets} bullets left in {6 - self.current_chamber} chambers.\nYou have {remaining_pulls} pull(s) left.", color=0xffa500)
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label="💰 CASHOUT", style=discord.ButtonStyle.success, emoji="💰", row=1)
+    async def cashout(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        if self.spins == 0:
+            cashout_amount = int(self.bet * 0.7)
+        elif self.spins == 1:
+            cashout_amount = int(self.bet * 1.2)
+        elif self.spins == 2:
+            cashout_amount = int(self.bet * 2.0)
+        else:
+            cashout_amount = int(self.bet * 2.8)
+        
+        update_balance(self.ctx.author.id, cashout_amount - self.bet)
+        embed = discord.Embed(title="🔫 RUSSIAN ROULETTE", description=f"You cashed out after {self.spins} pull(s) and won {cashout_amount} petals!", color=0x00ff00)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+# --- HORSE RACING GAME ---
+class RaceView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.bet = bet
+        self.horses = ["🐎 Thunder", "⚡ Lightning", "🔥 Blaze", "💨 Wind", "🌙 Shadow"]
+    
+    @discord.ui.button(label="🐎 Thunder", style=discord.ButtonStyle.primary, row=0)
+    async def horse1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.race(interaction, 0)
+    
+    @discord.ui.button(label="⚡ Lightning", style=discord.ButtonStyle.primary, row=0)
+    async def horse2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.race(interaction, 1)
+    
+    @discord.ui.button(label="🔥 Blaze", style=discord.ButtonStyle.primary, row=0)
+    async def horse3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.race(interaction, 2)
+    
+    @discord.ui.button(label="💨 Wind", style=discord.ButtonStyle.primary, row=1)
+    async def horse4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.race(interaction, 3)
+    
+    @discord.ui.button(label="🌙 Shadow", style=discord.ButtonStyle.primary, row=1)
+    async def horse5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.race(interaction, 4)
+    
+    async def race(self, interaction: discord.Interaction, choice):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        winner = random.randint(0, 4)
+        if choice == winner:
+            win = int(self.bet * 3.5)
+            update_balance(self.ctx.author.id, win - self.bet)
+            embed = discord.Embed(title="🏇 Horse Racing", description=f"Winner: {self.horses[winner]}\nYour bet: {self.horses[choice]}\n\nYou won {win} petals!", color=0x00ff00)
+        else:
+            update_balance(self.ctx.author.id, -self.bet)
+            embed = discord.Embed(title="🏇 Horse Racing", description=f"Winner: {self.horses[winner]}\nYour bet: {self.horses[choice]}\n\nYou lost {self.bet} petals!", color=0xff0000)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+# --- POKER GAME ---
+class PokerView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=30)
+        self.ctx = ctx
+        self.bet = bet
+    
+    @discord.ui.button(label="🃏 DEAL CARDS", style=discord.ButtonStyle.primary, emoji="🃏", row=0)
+    async def deal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ Not your game!", ephemeral=True)
+            return
+        
+        suits = ["♥️", "♦️", "♣️", "♠️"]
+        values = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+        
+        player_cards = [(random.choice(values), random.choice(suits)) for _ in range(5)]
+        bot_cards = [(random.choice(values), random.choice(suits)) for _ in range(5)]
+        
+        player_display = " ".join([f"{v}{s}" for v, s in player_cards])
+        bot_display = " ".join([f"{v}{s}" for v, s in bot_cards])
+        
+        player_score = self.evaluate_hand(player_cards)
+        bot_score = self.evaluate_hand(bot_cards)
+        
+        if player_score > bot_score:
+            win = int(self.bet * 1.8)
+            update_balance(self.ctx.author.id, win - self.bet)
+            result = f"You win {win} petals!"
+            color = 0x00ff00
+        else:
+            update_balance(self.ctx.author.id, -self.bet)
+            result = f"You lose {self.bet} petals!"
+            color = 0xff0000
+        
+        embed = discord.Embed(title="🃏 Poker Showdown", description=f"Your hand: {player_display}\nBot's hand: {bot_display}\n\n{result}", color=color)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+    
+    def evaluate_hand(self, cards):
+        values = [c[0] for c in cards]
+        value_counts = {}
+        for v in values:
+            value_counts[v] = value_counts.get(v, 0) + 1
+        
+        if 5 in value_counts.values():
+            return 8
+        elif 4 in value_counts.values():
+            return 7
+        elif 3 in value_counts.values() and 2 in value_counts.values():
+            return 6
+        elif 3 in value_counts.values():
+            return 3
+        elif list(value_counts.values()).count(2) == 2:
+            return 2
+        elif 2 in value_counts.values():
+            return 1
+        return 0
+
+# --- DUEL VIEW ---
+class DuelView(View):
+    def __init__(self, ctx, opponent, bet):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.opponent = opponent
+        self.bet = bet
+        self.accepted = False
+    
+    @discord.ui.button(label="⚔️ Accept", style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.opponent:
+            await interaction.response.send_message("❌ Not your duel!", ephemeral=True)
+            return
+        
+        if get_balance(self.ctx.author.id) < self.bet:
+            await interaction.response.send_message(f"❌ {self.ctx.author.name} doesn't have enough petals!", ephemeral=True)
+            return
+        if get_balance(self.opponent.id) < self.bet:
+            await interaction.response.send_message(f"❌ You don't have enough petals!", ephemeral=True)
+            return
+        
+        self.accepted = True
+        update_balance(self.ctx.author.id, -self.bet)
+        update_balance(self.opponent.id, -self.bet)
+        
+        winner = random.choice([self.ctx.author, self.opponent])
+        update_balance(winner.id, self.bet * 2)
+        
+        embed = discord.Embed(title="⚔️ Duel Result", description=f"{winner.mention} wins the duel and gets {self.bet * 2} petals!", color=0x00ff00)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+    
+    @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.opponent:
+            await interaction.response.send_message("❌ Not your duel!", ephemeral=True)
+            return
+        await interaction.response.edit_message(content="❌ Duel declined!", embed=None, view=None)
+        self.stop()
+
 # --- COMMANDS ---
 
 @bot.command()
 async def help(ctx):
     embed = discord.Embed(title="🌸 Blossom Garden Bot", description="Here are all my commands:", color=0xffb7c5)
     embed.add_field(name="💰 **Economy**", value="`bal`, `lb`, `daily`, `weekly`, `hourly`, `beg`, `farm`, `hunt`, `work`", inline=False)
-    embed.add_field(name="🎲 **Games**", value="`crash <bet>`, `coinflip <bet>`, `dice <bet>`, `slots <bet>`, `roulette <bet>`, `blackjack <bet>`, `rps <choice> <bet>`", inline=False)
-    embed.add_field(name="🛒 **Shop**", value="`shop`, `petshop`, `inventory`, `use <item>`, `buffs`", inline=False)
-    embed.add_field(name="🐾 **Pets**", value="`mypets`, `pet`, `petstats [@user]`", inline=False)
+    embed.add_field(name="🎲 **Games**", value="`crash`, `mines`, `color`, `coinflip`, `dice`, `slots`, `roulette`, `blackjack`, `rps`, `higherlower`, `tower`, `scratch`, `treasure`, `roulettegun`, `race`, `poker`", inline=False)
+    embed.add_field(name="🛒 **Shop**", value="`shop`, `petshop`, `inventory`, `use`, `buffs`", inline=False)
+    embed.add_field(name="🐾 **Pets**", value="`mypets`, `pet`, `petstats`", inline=False)
     embed.add_field(name="⚔️ **Duel**", value="`duel @user <bet>`", inline=False)
     embed.add_field(name="🎁 **Gifting**", value="`gift @user <amount>`, `giftstats`", inline=False)
     embed.add_field(name="🎟️ **Redeem**", value="`redeem`", inline=False)
@@ -1255,6 +1780,91 @@ async def roulette(ctx, bet: int):
         return
     embed = discord.Embed(title="🎡 Roulette", description=f"Bet: {bet} petals\nChoose Red, Black, or Green", color=0xffa500)
     await ctx.send(embed=embed, view=RouletteView(ctx, bet))
+
+@bot.command()
+async def mines(ctx, bet: int):
+    if bet <= 0 or get_balance(ctx.author.id) < bet:
+        await ctx.send("❌ Invalid bet or insufficient balance!")
+        return
+    bombs = random.sample(range(1, 10), 4)
+    embed = discord.Embed(title="💣 Minesweeper", description=f"Bet: {bet} petals\nFind safe flowers! (4 bombs hidden)", color=0xff69b4)
+    await ctx.send(embed=embed, view=MinesView(ctx, bet, bombs))
+
+@bot.command()
+async def color(ctx, bet: int):
+    if bet <= 0 or get_balance(ctx.author.id) < bet:
+        await ctx.send("❌ Invalid bet or insufficient balance!")
+        return
+    embed = discord.Embed(title="🎨 Color Predictor", description=f"Bet: {bet} petals\nPick a color!", color=0xff69b4)
+    await ctx.send(embed=embed, view=ColorView(ctx, bet))
+
+@bot.command()
+async def higherlower(ctx, bet: int):
+    if bet <= 0 or get_balance(ctx.author.id) < bet:
+        await ctx.send("❌ Invalid bet or insufficient balance!")
+        return
+    
+    card_names = {1:"A", 11:"J", 12:"Q", 13:"K"}
+    current_card = random.randint(1, 13)
+    current_display = card_names.get(current_card, str(current_card))
+    
+    card_emojis = {
+        1: "🃏", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣",
+        6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣", 10: "🔟",
+        11: "👑", 12: "👸", 13: "🤴"
+    }
+    current_emoji = card_emojis.get(current_card, "🎴")
+    
+    embed = discord.Embed(title="🎴 Higher or Lower", description=f"Your card: {current_emoji} {current_display}\nBet: {bet} petals\n\nWill the next card be HIGHER or LOWER?", color=0xffa500)
+    await ctx.send(embed=embed, view=HigherLowerView(ctx, bet, current_card, current_display, current_emoji))
+
+@bot.command()
+async def tower(ctx, bet: int):
+    if bet <= 0 or get_balance(ctx.author.id) < bet:
+        await ctx.send("❌ Invalid bet or insufficient balance!")
+        return
+    embed = discord.Embed(title="🏰 Tower Climb", description=f"Bet: {bet} petals\nClimb the tower and cash out!", color=0xffa500)
+    await ctx.send(embed=embed, view=TowerView(ctx, bet))
+
+@bot.command()
+async def scratch(ctx, bet: int):
+    if bet <= 0 or get_balance(ctx.author.id) < bet:
+        await ctx.send("❌ Invalid bet or insufficient balance!")
+        return
+    embed = discord.Embed(title="🎫 Scratch Card", description=f"Bet: {bet} petals\nScratch all three cards!", color=0xffa500)
+    await ctx.send(embed=embed, view=ScratchView(ctx, bet))
+
+@bot.command()
+async def treasure(ctx, bet: int):
+    if bet <= 0 or get_balance(ctx.author.id) < bet:
+        await ctx.send("❌ Invalid bet or insufficient balance!")
+        return
+    embed = discord.Embed(title="💎 Treasure Hunt", description=f"Bet: {bet} petals\nFind the treasure in 2 attempts!", color=0xffa500)
+    await ctx.send(embed=embed, view=TreasureHuntView(ctx, bet))
+
+@bot.command()
+async def roulettegun(ctx, bet: int):
+    if bet <= 0 or get_balance(ctx.author.id) < bet:
+        await ctx.send("❌ Invalid bet or insufficient balance!")
+        return
+    embed = discord.Embed(title="💀 Russian Roulette", description=f"Bet: {bet} petals\n⚠️ 3 BULLETS, 6 CHAMBERS!\nPull the trigger up to 3 times or cash out early!", color=0xff0000)
+    await ctx.send(embed=embed, view=RussianRouletteView(ctx, bet))
+
+@bot.command()
+async def race(ctx, bet: int):
+    if bet <= 0 or get_balance(ctx.author.id) < bet:
+        await ctx.send("❌ Invalid bet or insufficient balance!")
+        return
+    embed = discord.Embed(title="🏇 Horse Racing", description=f"Bet: {bet} petals\nPick a horse to win!", color=0xffa500)
+    await ctx.send(embed=embed, view=RaceView(ctx, bet))
+
+@bot.command()
+async def poker(ctx, bet: int):
+    if bet <= 0 or get_balance(ctx.author.id) < bet:
+        await ctx.send("❌ Invalid bet or insufficient balance!")
+        return
+    embed = discord.Embed(title="🃏 Poker", description=f"Bet: {bet} petals\nFace off against the bot!", color=0xffa500)
+    await ctx.send(embed=embed, view=PokerView(ctx, bet))
 
 @bot.command()
 async def blackjack(ctx, bet: int):
@@ -1498,7 +2108,7 @@ async def pet(ctx, action: str = None, *, name: str = None):
         happiness = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet["happiness"] // 10))
         embed = discord.Embed(title=f"🐾 {pet_data['emoji']} {pet.get('name', pet_data['name'])}", color=0xff69b4)
         embed.add_field(name="Stats", value=f"Level: {pet['level']}/{pet_data['max_level']}\nXP: {pet['xp']}/{pet_data['xp_per_level'] * pet['level']}\nHappiness: {happiness} {pet['happiness']}%", inline=False)
-        embed.set_footer(text="Commands: b!pet feed | b!pet play | b!pet collect | b!pet rename <name> | b!pet equip <name>")
+        embed.set_footer(text="Commands: b!pet feed | b!pet play | b!pet collect | b!pet rename | b!pet equip")
         await ctx.send(embed=embed)
     
     elif action.lower() == "feed":
@@ -1647,48 +2257,7 @@ async def petstats(ctx, member: discord.Member = None):
     embed.add_field(name="Stats", value=f"Level: {pet['level']}/{pet_data['max_level']}\nXP: {pet['xp']:,}/{xp_needed:,}\n{xp_bar}\nHappiness: {happiness} {pet['happiness']}%", inline=False)
     await ctx.send(embed=embed)
 
-# Duel Commands
-class DuelView(View):
-    def __init__(self, ctx, opponent, bet):
-        super().__init__(timeout=60)
-        self.ctx = ctx
-        self.opponent = opponent
-        self.bet = bet
-        self.accepted = False
-    
-    @discord.ui.button(label="⚔️ Accept", style=discord.ButtonStyle.success)
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.opponent:
-            await interaction.response.send_message("❌ Not your duel!", ephemeral=True)
-            return
-        
-        if get_balance(self.ctx.author.id) < self.bet:
-            await interaction.response.send_message(f"❌ {self.ctx.author.name} doesn't have enough petals!", ephemeral=True)
-            return
-        if get_balance(self.opponent.id) < self.bet:
-            await interaction.response.send_message(f"❌ You don't have enough petals!", ephemeral=True)
-            return
-        
-        self.accepted = True
-        update_balance(self.ctx.author.id, -self.bet)
-        update_balance(self.opponent.id, -self.bet)
-        
-        # Simple duel - just coinflip for now
-        winner = random.choice([self.ctx.author, self.opponent])
-        update_balance(winner.id, self.bet * 2)
-        
-        embed = discord.Embed(title="⚔️ Duel Result", description=f"{winner.mention} wins the duel and gets {self.bet * 2} petals!", color=0x00ff00)
-        await interaction.response.edit_message(embed=embed, view=None)
-        self.stop()
-    
-    @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger)
-    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.opponent:
-            await interaction.response.send_message("❌ Not your duel!", ephemeral=True)
-            return
-        await interaction.response.edit_message(content="❌ Duel declined!", embed=None, view=None)
-        self.stop()
-
+# Duel Command
 @bot.command()
 async def duel(ctx, opponent: discord.Member, bet: int):
     if opponent == ctx.author:
@@ -1782,6 +2351,29 @@ async def add_pet(ctx, member: discord.Member, pet_name: str):
     }
     save_all_data()
     await ctx.send(f"✅ Added pet {pet_shop_items[pet_id]['name']} to {member.mention}")
+
+@bot.command()
+async def remove_pet(ctx, member: discord.Member, pet_name: str):
+    if ctx.author.name not in ADMINS:
+        await ctx.send("❌ No permission!")
+        return
+    pet_id = None
+    for key, val in pet_shop_items.items():
+        if val['name'].lower() == pet_name.lower():
+            pet_id = key
+            break
+    if not pet_id:
+        await ctx.send(f"❌ Pet '{pet_name}' not found!")
+        return
+    
+    if member.id in player_pets and pet_id in player_pets[member.id]:
+        del player_pets[member.id][pet_id]
+        if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
+            del pet_equipped[member.id]
+        save_all_data()
+        await ctx.send(f"✅ Removed pet {pet_name} from {member.mention}")
+    else:
+        await ctx.send(f"❌ {member.mention} doesn't own that pet!")
 
 @bot.command()
 async def setup(ctx):
