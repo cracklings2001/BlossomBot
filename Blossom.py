@@ -30,11 +30,15 @@ daily_cooldown = {}
 weekly_cooldown = {}
 hourly_cooldown = {}
 
-# --- NEW COOLDOWN DICTIONARIES FOR FARM/BEG/HUNT/WORK ---
+# --- COOLDOWN DICTIONARIES FOR FARM/BEG/HUNT/WORK ---
 beg_cooldown = {}
 farm_cooldown = {}
 hunt_cooldown = {}
 work_cooldown = {}
+
+# --- GIFTING SYSTEM VARIABLES ---
+gift_cooldown = {}
+DAILY_GIFT_LIMIT = 1000000  # 1,000,000 petals per day
 
 def get_balance(user_id):
     return economy.get(user_id, 0)
@@ -42,7 +46,7 @@ def get_balance(user_id):
 def update_balance(user_id, amount):
     economy[user_id] = get_balance(user_id) + amount
 
-def check_cooldown(cooldown_dict, user_id, cooldown_seconds=86400):  # 24 hours default
+def check_cooldown(cooldown_dict, user_id, cooldown_seconds=86400):
     """Check if user is on cooldown, returns (is_on_cooldown, remaining_time)"""
     if user_id in cooldown_dict:
         last_used = cooldown_dict[user_id]
@@ -100,7 +104,7 @@ class RedeemStarterView(View):
     async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RedeemModal())
 
-# --- UI: CRASH GAME ---
+# --- NERFED CRASH GAME (Higher crash chance) ---
 class CrashView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=120.0)
@@ -109,13 +113,14 @@ class CrashView(View):
         self.multiplier = 1.0
         self.cashed_out = False
         self.crashed = False
-        crash_type = random.choice(["early", "early", "normal", "normal", "late"])
+        # More aggressive crash pattern - higher chance of early crash
+        crash_type = random.choice(["early", "early", "early", "normal", "normal", "late"])
         if crash_type == "early":
-            self.crash_at = round(random.uniform(1.05, 1.8), 2)
+            self.crash_at = round(random.uniform(1.05, 1.5), 2)
         elif crash_type == "normal":
-            self.crash_at = round(random.uniform(1.5, 3.5), 2)
+            self.crash_at = round(random.uniform(1.3, 2.5), 2)
         else:
-            self.crash_at = round(random.uniform(2.5, 5.0), 2)
+            self.crash_at = round(random.uniform(2.0, 4.0), 2)
         self.ticks = 0
     
     @discord.ui.button(label="💰 Cash Out Now!", style=discord.ButtonStyle.success, emoji="💎")
@@ -141,16 +146,16 @@ class CrashView(View):
         emoji_index = 0
         
         while not self.cashed_out:
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(1.0)
             if self.cashed_out: 
                 break
             
             self.ticks += 1
-            growth = random.uniform(0.05, 0.6)
+            growth = random.uniform(0.08, 0.7)
             self.multiplier += growth
             emoji_index = (emoji_index + 1) % len(flight_emoji)
             
-            if random.random() < 0.05 and self.multiplier > 1.2:
+            if random.random() < 0.12 and self.multiplier > 1.2:
                 self.crashed = True
                 self.stop()
                 update_balance(self.ctx.author.id, -self.bet)
@@ -180,7 +185,7 @@ class CrashView(View):
                 await msg.edit(embed=embed, view=None)
                 break
             
-            risk_percentage = min(95, int((self.multiplier / 3.5) * 100))
+            risk_percentage = min(95, int((self.multiplier / 3.0) * 100))
             
             embed = discord.Embed(
                 title=f"{flight_emoji[emoji_index]} FLIGHT STATUS",
@@ -191,7 +196,7 @@ class CrashView(View):
             embed.add_field(name="⚠️ Crash Risk", value=f"{risk_percentage}%", inline=True)
             await msg.edit(embed=embed, view=self)
 
-# --- UI: MINES GAME ---
+# --- NERFED MINES GAME (More bombs) ---
 class MinesButton(Button):
     def __init__(self, num): 
         super().__init__(label="🌸", style=discord.ButtonStyle.secondary, row=(num-1)//3, emoji="🌸")
@@ -224,7 +229,7 @@ class MinesButton(Button):
             view.revealed += 1
             self.style, self.label, self.disabled, self.emoji = discord.ButtonStyle.success, "🍃", True, None
             
-            mult = round(1.25 ** view.revealed, 2)
+            mult = round(1.15 ** view.revealed, 2)
             val = int(view.bet * mult)
             
             async def co(i):
@@ -264,7 +269,7 @@ class MinesView(View):
         for i in range(1, 10):
             self.add_item(MinesButton(i))
 
-# --- UI: COLOR GAME ---
+# --- NERFED COLOR GAME (Reduced win multiplier) ---
 class ColorButton(Button):
     def __init__(self, name, emoji, style_color):
         super().__init__(label=name, emoji=emoji, style=style_color)
@@ -286,7 +291,7 @@ class ColorButton(Button):
         result_display = " 🎲 ".join(rolled)
         
         if hits > 0:
-            win = view.bet * (hits + 1)
+            win = view.bet * hits
             update_balance(view.ctx.author.id, win - view.bet)
             embed = discord.Embed(
                 title="🎉 VICTORY! 🎉",
@@ -323,7 +328,7 @@ class ColorView(View):
         for name, emoji, style in color_configs:
             self.add_item(ColorButton(name, emoji, style))
 
-# --- FIXED: COINFLIP GAME ---
+# --- NERFED COINFLIP GAME (Lower win multiplier) ---
 class CoinflipView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -345,10 +350,11 @@ class CoinflipView(View):
         
         result = random.choice(["heads", "tails"])
         if choice == result:
-            update_balance(self.ctx.author.id, self.bet)
+            win = int(self.bet * 0.9)
+            update_balance(self.ctx.author.id, win)
             embed = discord.Embed(
                 title="🪙 COINFLIP 🪙",
-                description=f"**Your choice:** {choice.upper()}\n**Result:** {result.upper()}\n\n🎉 **YOU WIN!** +{self.bet} petals!",
+                description=f"**Your choice:** {choice.upper()}\n**Result:** {result.upper()}\n\n🎉 **YOU WIN!** +{win} petals!",
                 color=0x00ff00
             )
         else:
@@ -362,7 +368,7 @@ class CoinflipView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- FIXED: HIGHER OR LOWER GAME ---
+# --- NERFED HIGHER OR LOWER GAME (Lower win multiplier) ---
 class HigherLowerView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -397,7 +403,7 @@ class HigherLowerView(View):
         next_display = card_names.get(next_card, str(next_card))
         
         if (choice == "higher" and next_card > self.current_card) or (choice == "lower" and next_card < self.current_card):
-            win = self.bet * 2
+            win = int(self.bet * 1.8)
             update_balance(self.ctx.author.id, win - self.bet)
             embed = discord.Embed(
                 title="🎴 HIGHER OR LOWER 🎴",
@@ -422,7 +428,7 @@ class HigherLowerView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- SLOT MACHINE GAME ---
+# --- NERFED SLOT MACHINE GAME (Lower payouts) ---
 class SlotMachineView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -440,20 +446,20 @@ class SlotMachineView(View):
         
         if reels[0] == reels[1] == reels[2]:
             if reels[0] == "7️⃣":
-                win = self.bet * 10
+                win = self.bet * 6
             elif reels[0] == "💎":
-                win = self.bet * 8
-            elif reels[0] == "⭐":
                 win = self.bet * 5
-            elif reels[0] == "🌸":
+            elif reels[0] == "⭐":
                 win = self.bet * 4
-            else:
+            elif reels[0] == "🌸":
                 win = self.bet * 3
+            else:
+                win = self.bet * 2
             update_balance(self.ctx.author.id, win - self.bet)
             result = f"🎉 **JACKPOT!** Won {win} petals!"
             color = 0x00ff00
         elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
-            win = self.bet * 2
+            win = int(self.bet * 1.5)
             update_balance(self.ctx.author.id, win - self.bet)
             result = f"🎊 **MATCH!** Won {win} petals!"
             color = 0xffa500
@@ -470,7 +476,7 @@ class SlotMachineView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- ROULETTE GAME ---
+# --- NERFED ROULETTE GAME (Lower payouts) ---
 class RouletteView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=60.0)
@@ -497,7 +503,7 @@ class RouletteView(View):
         number = random.randint(0, 36)
         if number == 0:
             result = "green"
-            multiplier = 14
+            multiplier = 12
         elif number in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]:
             result = "red"
             multiplier = 2
@@ -506,7 +512,10 @@ class RouletteView(View):
             multiplier = 2
         
         if choice == result:
-            win = self.bet * multiplier
+            if result == "green":
+                win = self.bet * multiplier
+            else:
+                win = int(self.bet * 1.8)
             update_balance(self.ctx.author.id, win - self.bet)
             embed = discord.Embed(
                 title="🎡 ROULETTE 🎡",
@@ -524,7 +533,7 @@ class RouletteView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- TOWER CLIMB GAME ---
+# --- NERFED TOWER CLIMB (Higher fall chance) ---
 class TowerView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=60.0)
@@ -535,7 +544,7 @@ class TowerView(View):
         self.update_display()
     
     def update_display(self):
-        self.multiplier = round(1.2 ** self.floor, 2)
+        self.multiplier = round(1.1 ** self.floor, 2)
     
     @discord.ui.button(label="⬆️ CLIMB", style=discord.ButtonStyle.success, emoji="⬆️", row=0)
     async def climb(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -543,7 +552,7 @@ class TowerView(View):
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
         
-        if random.random() < 0.25:
+        if random.random() < 0.4:
             update_balance(self.ctx.author.id, -self.bet)
             embed = discord.Embed(
                 title="🏰 TOWER CLIMB 🏰",
@@ -579,7 +588,188 @@ class TowerView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- SCRATCH CARD GAME ---
+# --- NERFED TREASURE HUNT (Lower win multiplier) ---
+class TreasureHuntView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=30.0)
+        self.ctx = ctx
+        self.bet = bet
+        self.treasure_position = random.randint(1, 6)
+        self.attempts = 0
+        self.max_attempts = 2
+    
+    @discord.ui.button(label="📍 1", style=discord.ButtonStyle.secondary, row=0)
+    async def spot1(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 1, button)
+    
+    @discord.ui.button(label="📍 2", style=discord.ButtonStyle.secondary, row=0)
+    async def spot2(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 2, button)
+    
+    @discord.ui.button(label="📍 3", style=discord.ButtonStyle.secondary, row=0)
+    async def spot3(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 3, button)
+    
+    @discord.ui.button(label="📍 4", style=discord.ButtonStyle.secondary, row=1)
+    async def spot4(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 4, button)
+    
+    @discord.ui.button(label="📍 5", style=discord.ButtonStyle.secondary, row=1)
+    async def spot5(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 5, button)
+    
+    @discord.ui.button(label="📍 6", style=discord.ButtonStyle.secondary, row=1)
+    async def spot6(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.hunt(interaction, 6, button)
+    
+    async def hunt(self, interaction: discord.Interaction, spot, button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
+            return
+        
+        if self.attempts >= self.max_attempts:
+            return
+        
+        self.attempts += 1
+        if spot == self.treasure_position:
+            win = int(self.bet * 2.5)
+            update_balance(self.ctx.author.id, win - self.bet)
+            embed = discord.Embed(
+                title="💎 TREASURE HUNT 💎",
+                description=f"You found the treasure at spot **{spot}**!\n🎉 Won **{win} petals**!",
+                color=0x00ff00
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        elif self.attempts >= self.max_attempts:
+            update_balance(self.ctx.author.id, -self.bet)
+            embed = discord.Embed(
+                title="💎 TREASURE HUNT 💎",
+                description=f"You didn't find the treasure! It was at spot **{self.treasure_position}**.\n💔 Lost **{self.bet} petals**!",
+                color=0xff0000
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        else:
+            button.disabled = True
+            remaining = self.max_attempts - self.attempts
+            await interaction.response.edit_message(content=f"Nothing at spot {spot}! Try again! ({remaining} attempt{'s' if remaining > 1 else ''} remaining)", view=self)
+
+# --- DEADLY RUSSIAN ROULETTE (3 Bullets, 6 Chambers) ---
+class RussianRouletteView(View):
+    def __init__(self, ctx, bet):
+        super().__init__(timeout=30.0)
+        self.ctx = ctx
+        self.bet = bet
+        chambers = [False] * 6
+        bullet_positions = random.sample(range(6), 3)
+        for pos in bullet_positions:
+            chambers[pos] = True
+        self.chambers = chambers
+        self.current_chamber = 0
+        self.spins = 0
+        self.max_spins = 3
+    
+    @discord.ui.button(label="🔫 PULL TRIGGER", style=discord.ButtonStyle.danger, emoji="🔫", row=0)
+    async def pull(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
+            return
+        
+        self.spins += 1
+        
+        if self.chambers[self.current_chamber]:
+            update_balance(self.ctx.author.id, -self.bet)
+            embed = discord.Embed(
+                title="💀 RUSSIAN ROULETTE 💀",
+                description=f"**BANG! BANG! BANG!**\nChamber {self.current_chamber + 1} had a bullet!\n💔 You lost **{self.bet} petals**!",
+                color=0xff0000
+            )
+            embed.add_field(name="💀 Bullets Remaining", value=f"{sum(self.chambers)}/6 chambers loaded", inline=False)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+            return
+        
+        self.current_chamber += 1
+        remaining_bullets = sum(self.chambers[self.current_chamber:])
+        
+        if self.spins >= self.max_spins:
+            win = self.bet * 3
+            update_balance(self.ctx.author.id, win - self.bet)
+            
+            embed = discord.Embed(
+                title="🔫 RUSSIAN ROULETTE 🔫",
+                description=f"**Click! Click! Click!**\nSomehow you survived {self.max_spins} pulls with 3 bullets loaded!\n🎉 You won **{int(win)} petals**!",
+                color=0x00ff00
+            )
+            embed.add_field(name="💀 Bullets Remaining", value=f"{remaining_bullets} bullets still in chambers", inline=False)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+            return
+        
+        remaining_pulls = self.max_spins - self.spins
+        survival_chance = self.calculate_survival_chance()
+        
+        embed = discord.Embed(
+            title="🔫 RUSSIAN ROULETTE 🔫",
+            description=f"**Click!** Chamber {self.current_chamber} was empty!\nYou have **{remaining_pulls}** pull(s) remaining.\n💀 {remaining_bullets} bullet(s) still in the {6 - self.current_chamber} remaining chambers!",
+            color=0xffa500
+        )
+        embed.add_field(name="📊 Survival Chance", value=f"{survival_chance:.1f}%", inline=True)
+        embed.add_field(name="💰 Potential Win", value=f"{int(self.bet * 3)} petals", inline=True)
+        embed.add_field(name="🎯 Risk Level", value="🔴🔴🔴 EXTREME", inline=False)
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    def calculate_survival_chance(self):
+        remaining_chambers = 6 - self.current_chamber
+        remaining_bullets = sum(self.chambers[self.current_chamber:])
+        remaining_pulls = self.max_spins - self.spins
+        
+        if remaining_pulls <= 0 or remaining_chambers <= 0:
+            return 100.0
+        
+        chance = 1.0
+        for i in range(remaining_pulls):
+            if remaining_chambers - i <= 0:
+                chance = 0
+                break
+            chance *= (remaining_chambers - i - remaining_bullets) / (remaining_chambers - i)
+        
+        return chance * 100
+    
+    @discord.ui.button(label="💰 CASHOUT EARLY", style=discord.ButtonStyle.success, emoji="💰", row=1)
+    async def cashout(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
+            return
+        
+        remaining_bullets = sum(self.chambers[self.current_chamber:])
+        
+        if self.spins == 0:
+            cashout_amount = int(self.bet * 0.7)
+            risk_text = "🛡️ Coward's Way Out"
+        elif self.spins == 1:
+            cashout_amount = int(self.bet * 1.2)
+            risk_text = "😅 Smart Move"
+        elif self.spins == 2:
+            cashout_amount = int(self.bet * 2.0)
+            risk_text = "🎲 Bold Decision"
+        else:
+            cashout_amount = int(self.bet * 2.8)
+            risk_text = "🔥 Risk Taker"
+        
+        update_balance(self.ctx.author.id, cashout_amount - self.bet)
+        
+        embed = discord.Embed(
+            title="🔫 RUSSIAN ROULETTE 🔫",
+            description=f"You cashed out after **{self.spins}** pull(s)!\n🏆 **{risk_text}**\n💰 You won **{cashout_amount} petals**!",
+            color=0x00ff00
+        )
+        embed.add_field(name="💀 Bullets Still Loaded", value=f"{remaining_bullets} bullets in remaining chambers", inline=False)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+# --- NERFED SCRATCH CARD (Lower payouts) ---
 class ScratchView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -614,7 +804,7 @@ class ScratchView(View):
         
         if all(self.revealed):
             if self.values[0] == self.values[1] == self.values[2]:
-                win = self.bet * 5
+                win = self.bet * 3
                 update_balance(self.ctx.author.id, win - self.bet)
                 embed = discord.Embed(
                     title="🎫 SCRATCH CARD 🎫",
@@ -622,7 +812,7 @@ class ScratchView(View):
                     color=0x00ff00
                 )
             elif self.values[0] == self.values[1] or self.values[1] == self.values[2] or self.values[0] == self.values[2]:
-                win = self.bet * 2
+                win = int(self.bet * 1.5)
                 update_balance(self.ctx.author.id, win - self.bet)
                 embed = discord.Embed(
                     title="🎫 SCRATCH CARD 🎫",
@@ -641,192 +831,7 @@ class ScratchView(View):
         else:
             await interaction.response.edit_message(content=f"Scratched! {self.values[index]} revealed! Keep scratching!", view=self)
 
-# --- TREASURE HUNT GAME ---
-class TreasureHuntView(View):
-    def __init__(self, ctx, bet):
-        super().__init__(timeout=30.0)
-        self.ctx = ctx
-        self.bet = bet
-        self.treasure_position = random.randint(1, 5)
-        self.attempts = 0
-    
-    @discord.ui.button(label="📍 1", style=discord.ButtonStyle.secondary, row=0)
-    async def spot1(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.hunt(interaction, 1, button)
-    
-    @discord.ui.button(label="📍 2", style=discord.ButtonStyle.secondary, row=0)
-    async def spot2(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.hunt(interaction, 2, button)
-    
-    @discord.ui.button(label="📍 3", style=discord.ButtonStyle.secondary, row=0)
-    async def spot3(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.hunt(interaction, 3, button)
-    
-    @discord.ui.button(label="📍 4", style=discord.ButtonStyle.secondary, row=1)
-    async def spot4(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.hunt(interaction, 4, button)
-    
-    @discord.ui.button(label="📍 5", style=discord.ButtonStyle.secondary, row=1)
-    async def spot5(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.hunt(interaction, 5, button)
-    
-    async def hunt(self, interaction: discord.Interaction, spot, button):
-        if interaction.user != self.ctx.author:
-            await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
-            return
-        
-        if self.attempts >= 2:
-            return
-        
-        self.attempts += 1
-        if spot == self.treasure_position:
-            win = self.bet * 3
-            update_balance(self.ctx.author.id, win - self.bet)
-            embed = discord.Embed(
-                title="💎 TREASURE HUNT 💎",
-                description=f"You found the treasure at spot **{spot}**!\n🎉 Won **{win} petals**!",
-                color=0x00ff00
-            )
-            await interaction.response.edit_message(embed=embed, view=None)
-            self.stop()
-        elif self.attempts >= 2:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(
-                title="💎 TREASURE HUNT 💎",
-                description=f"You didn't find the treasure! It was at spot **{self.treasure_position}**.\n💔 Lost **{self.bet} petals**!",
-                color=0xff0000
-            )
-            await interaction.response.edit_message(embed=embed, view=None)
-            self.stop()
-        else:
-            button.disabled = True
-            await interaction.response.edit_message(content=f"Nothing at spot {spot}! Try again! (1 attempt remaining)", view=self)
-
-# --- DEADLY RUSSIAN ROULETTE GAME (3 Bullets, 6 Chambers) ---
-class RussianRouletteView(View):
-    def __init__(self, ctx, bet):
-        super().__init__(timeout=30.0)
-        self.ctx = ctx
-        self.bet = bet
-        # Place 3 bullets randomly in 6 chambers
-        chambers = [False] * 6
-        bullet_positions = random.sample(range(6), 3)
-        for pos in bullet_positions:
-            chambers[pos] = True
-        self.chambers = chambers
-        self.current_chamber = 0
-        self.spins = 0
-        self.max_spins = 3  # Max 3 pulls per game (can't pull all 6 or it's guaranteed death)
-    
-    @discord.ui.button(label="🔫 PULL TRIGGER", style=discord.ButtonStyle.danger, emoji="🔫", row=0)
-    async def pull(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.ctx.author:
-            await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
-            return
-        
-        self.spins += 1
-        
-        # Check if current chamber has a bullet
-        if self.chambers[self.current_chamber]:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(
-                title="💀 RUSSIAN ROULETTE 💀",
-                description=f"**BANG! BANG! BANG!**\nChamber {self.current_chamber + 1} had a bullet!\n💔 You lost **{self.bet} petals**!",
-                color=0xff0000
-            )
-            embed.add_field(name="💀 Bullets Remaining", value=f"{sum(self.chambers)}/6 chambers loaded", inline=False)
-            await interaction.response.edit_message(embed=embed, view=None)
-            self.stop()
-            return
-        
-        # Move to next chamber
-        self.current_chamber += 1
-        
-        # Calculate remaining bullets
-        remaining_bullets = sum(self.chambers[self.current_chamber:])
-        
-        # If survived all allowed pulls
-        if self.spins >= self.max_spins:
-            win = self.bet * 3  # Higher reward because it's much riskier
-            update_balance(self.ctx.author.id, win - self.bet)
-            
-            embed = discord.Embed(
-                title="🔫 RUSSIAN ROULETTE 🔫",
-                description=f"**Click! Click! Click!**\nSomehow you survived {self.max_spins} pulls with 3 bullets loaded!\n🎉 You won **{int(win)} petals**!",
-                color=0x00ff00
-            )
-            embed.add_field(name="💀 Bullets Remaining", value=f"{remaining_bullets} bullets still in chambers", inline=False)
-            await interaction.response.edit_message(embed=embed, view=None)
-            self.stop()
-            return
-        
-        # Still alive, continue game
-        remaining_pulls = self.max_spins - self.spins
-        survival_chance = self.calculate_survival_chance()
-        
-        embed = discord.Embed(
-            title="🔫 RUSSIAN ROULETTE 🔫",
-            description=f"**Click!** Chamber {self.current_chamber} was empty!\nYou have **{remaining_pulls}** pull(s) remaining.\n💀 {remaining_bullets} bullet(s) still in the {6 - self.current_chamber} remaining chambers!",
-            color=0xffa500
-        )
-        embed.add_field(name="📊 Survival Chance", value=f"{survival_chance:.1f}%", inline=True)
-        embed.add_field(name="💰 Potential Win", value=f"{int(self.bet * 3)} petals", inline=True)
-        embed.add_field(name="🎯 Risk Level", value="🔴🔴🔴 EXTREME", inline=False)
-        await interaction.response.edit_message(embed=embed, view=self)
-    
-    def calculate_survival_chance(self):
-        """Calculate chance of surviving remaining pulls"""
-        remaining_chambers = 6 - self.current_chamber
-        remaining_bullets = sum(self.chambers[self.current_chamber:])
-        remaining_pulls = self.max_spins - self.spins
-        
-        if remaining_pulls <= 0 or remaining_chambers <= 0:
-            return 100.0
-        
-        # Calculate probability of surviving all remaining pulls
-        chance = 1.0
-        for i in range(remaining_pulls):
-            if remaining_chambers - i <= 0:
-                chance = 0
-                break
-            chance *= (remaining_chambers - i - remaining_bullets) / (remaining_chambers - i)
-        
-        return chance * 100
-    
-    @discord.ui.button(label="💰 CASHOUT EARLY", style=discord.ButtonStyle.success, emoji="💰", row=1)
-    async def cashout(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.ctx.author:
-            await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
-            return
-        
-        # Cashout with progressive rewards based on risk taken
-        remaining_bullets = sum(self.chambers[self.current_chamber:])
-        
-        if self.spins == 0:
-            cashout_amount = int(self.bet * 0.7)  # 70% return - take a small loss
-            risk_text = "🛡️ Coward's Way Out"
-        elif self.spins == 1:
-            cashout_amount = int(self.bet * 1.2)  # 120% return
-            risk_text = "😅 Smart Move"
-        elif self.spins == 2:
-            cashout_amount = int(self.bet * 2.0)  # 200% return
-            risk_text = "🎲 Bold Decision"
-        else:
-            cashout_amount = int(self.bet * 2.8)  # 280% return
-            risk_text = "🔥 Risk Taker"
-        
-        update_balance(self.ctx.author.id, cashout_amount - self.bet)
-        
-        embed = discord.Embed(
-            title="🔫 RUSSIAN ROULETTE 🔫",
-            description=f"You cashed out after **{self.spins}** pull(s)!\n🏆 **{risk_text}**\n💰 You won **{cashout_amount} petals**!",
-            color=0x00ff00
-        )
-        embed.add_field(name="💀 Bullets Still Loaded", value=f"{remaining_bullets} bullets in remaining chambers", inline=False)
-        await interaction.response.edit_message(embed=embed, view=None)
-        self.stop()
-
-# --- HORSE RACING GAME ---
+# --- NERFED HORSE RACING (Lower win multiplier) ---
 class RaceView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -861,7 +866,7 @@ class RaceView(View):
         
         winner = random.randint(0, 4)
         if choice == winner:
-            win = self.bet * 4
+            win = int(self.bet * 3.5)
             update_balance(self.ctx.author.id, win - self.bet)
             embed = discord.Embed(
                 title="🏇 HORSE RACING 🏇",
@@ -878,7 +883,7 @@ class RaceView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- POKER GAME ---
+# --- NERFED POKER (Ties go to house, lower payouts) ---
 class PokerView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -904,17 +909,14 @@ class PokerView(View):
         bot_score = self.evaluate_hand(bot_cards)
         
         if player_score > bot_score:
-            win = self.bet * 2
+            win = int(self.bet * 1.8)
             update_balance(self.ctx.author.id, win - self.bet)
             result = f"🎉 **YOU WIN!** +{win} petals!"
             color = 0x00ff00
-        elif player_score < bot_score:
+        else:
             update_balance(self.ctx.author.id, -self.bet)
             result = f"💔 **YOU LOSE!** -{self.bet} petals!"
             color = 0xff0000
-        else:
-            result = "🤝 **TIE!** Bet returned!"
-            color = 0xffa500
         
         embed = discord.Embed(
             title="🃏 POKER SHOWDOWN 🃏",
@@ -944,7 +946,7 @@ class PokerView(View):
             return 1
         return 0
 
-# --- DICE DUEL GAME ---
+# --- NERFED DICE DUEL (Lower win multiplier) ---
 class DiceDuelView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
@@ -966,7 +968,7 @@ class DiceDuelView(View):
         }
         
         if player_roll > bot_roll:
-            win = self.bet * 2
+            win = int(self.bet * 1.8)
             update_balance(self.ctx.author.id, win - self.bet)
             result = f"🎉 **YOU WIN!** +{win} petals!"
             color = 0x00ff00
@@ -975,8 +977,9 @@ class DiceDuelView(View):
             result = f"💔 **YOU LOSE!** -{self.bet} petals!"
             color = 0xff0000
         else:
-            result = "🤝 **TIE!** Bet returned!"
-            color = 0xffa500
+            update_balance(self.ctx.author.id, -self.bet)
+            result = f"💔 **TIE GOES TO HOUSE!** -{self.bet} petals!"
+            color = 0xff0000
         
         embed = discord.Embed(
             title="🎲 DICE DUEL 🎲",
@@ -985,6 +988,321 @@ class DiceDuelView(View):
         )
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
+
+# --- DUEL GAME (Player vs Player) ---
+class DuelView(View):
+    def __init__(self, ctx, opponent, bet):
+        super().__init__(timeout=60.0)
+        self.ctx = ctx
+        self.opponent = opponent
+        self.bet = bet
+        self.accepted = False
+        self.weapons = ["🗡️ Sword", "🏹 Bow", "🔮 Magic", "💣 Bomb", "⚔️ Axe", "🔫 Pistol"]
+        self.player_health = 100
+        self.opponent_health = 100
+        self.turn = None
+        self.buttons_disabled = False
+    
+    @discord.ui.button(label="✅ Accept Duel", style=discord.ButtonStyle.success, emoji="⚔️", row=0)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.opponent:
+            await interaction.response.send_message("❌ Only the challenged player can accept this duel!", ephemeral=True)
+            return
+        
+        if self.accepted:
+            await interaction.response.send_message("❌ This duel has already been accepted!", ephemeral=True)
+            return
+        
+        if get_balance(self.opponent.id) < self.bet:
+            await interaction.response.send_message(f"❌ {self.opponent.mention} doesn't have enough petals to accept this duel!", ephemeral=True)
+            self.stop()
+            return
+        
+        self.accepted = True
+        
+        for child in self.children:
+            if child.label == "✅ Accept Duel":
+                self.remove_item(child)
+        
+        embed = discord.Embed(
+            title="⚔️ DUEL ACCEPTED! ⚔️",
+            description=f"{self.opponent.mention} accepted the duel!\n\n**💀 Choose your weapon to start the battle! 💀**\n\n{self.ctx.author.mention} attacks first!",
+            color=0xffa500
+        )
+        embed.add_field(name="📊 Stats", value=f"Both players have 100 HP\nBet: **{self.bet} petals**", inline=False)
+        
+        self.add_weapon_buttons()
+        self.turn = 'player'
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    def add_weapon_buttons(self):
+        for i, weapon in enumerate(self.weapons):
+            button = Button(label=weapon, style=discord.ButtonStyle.primary, row=i//2, emoji=weapon.split()[0])
+            button.callback = self.create_weapon_callback(weapon)
+            self.add_item(button)
+        
+        surrender = Button(label="🏳️ Surrender", style=discord.ButtonStyle.danger, emoji="🏳️", row=3)
+        surrender.callback = self.surrender_callback
+        self.add_item(surrender)
+    
+    def create_weapon_callback(self, weapon):
+        async def callback(interaction: discord.Interaction):
+            if self.buttons_disabled:
+                await interaction.response.send_message("⏳ The battle is already in progress!", ephemeral=True)
+                return
+            
+            if self.turn == 'player' and interaction.user == self.ctx.author:
+                await self.fight(interaction, weapon, 'player')
+            elif self.turn == 'opponent' and interaction.user == self.opponent:
+                await self.fight(interaction, weapon, 'opponent')
+            else:
+                await interaction.response.send_message("❌ It's not your turn!", ephemeral=True)
+        return callback
+    
+    async def surrender_callback(self, interaction: discord.Interaction):
+        if interaction.user == self.ctx.author:
+            loser = self.ctx.author
+            winner = self.opponent
+        elif interaction.user == self.opponent:
+            loser = self.opponent
+            winner = self.ctx.author
+        else:
+            await interaction.response.send_message("❌ You're not in this duel!", ephemeral=True)
+            return
+        
+        update_balance(loser.id, -self.bet)
+        update_balance(winner.id, self.bet)
+        
+        embed = discord.Embed(
+            title="🏳️ SURRENDER! 🏳️",
+            description=f"{loser.mention} surrendered the duel!\n\n🎉 **{winner.mention} wins {self.bet} petals!**",
+            color=0xff0000
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+    
+    async def fight(self, interaction: discord.Interaction, weapon, attacker):
+        self.buttons_disabled = True
+        
+        weapon_damage = {
+            "🗡️ Sword": random.randint(15, 35),
+            "🏹 Bow": random.randint(10, 40),
+            "🔮 Magic": random.randint(5, 45),
+            "💣 Bomb": random.randint(20, 30),
+            "⚔️ Axe": random.randint(15, 35),
+            "🔫 Pistol": random.randint(10, 40)
+        }
+        
+        is_critical = random.random() < 0.2
+        damage = weapon_damage[weapon]
+        if is_critical:
+            damage = int(damage * 1.5)
+        
+        is_miss = random.random() < 0.1
+        
+        if attacker == 'player':
+            attacker_user = self.ctx.author
+            defender = self.opponent
+            defender_health = self.opponent_health
+        else:
+            attacker_user = self.opponent
+            defender = self.ctx.author
+            defender_health = self.player_health
+        
+        if is_miss:
+            damage_dealt = 0
+            hit_text = f"**{weapon} MISSED!** {attacker_user.display_name}'s attack failed completely!"
+        else:
+            damage_dealt = damage
+            hit_text = f"**{weapon} hit for {damage} damage!**" + (" 💥 **CRITICAL HIT!** 💥" if is_critical else "")
+        
+        if defender_health == self.opponent_health:
+            self.opponent_health = max(0, defender_health - damage_dealt)
+        else:
+            self.player_health = max(0, defender_health - damage_dealt)
+        
+        embed = discord.Embed(
+            title="⚔️ EPIC DUEL ⚔️",
+            description=f"**{attacker_user.display_name}** attacks with {weapon}!\n{hit_text}",
+            color=0xff6600
+        )
+        
+        player_bar = self.create_health_bar(self.player_health)
+        opponent_bar = self.create_health_bar(self.opponent_health)
+        
+        embed.add_field(name=f"💚 {self.ctx.author.display_name}", value=f"{player_bar} `{self.player_health}/100`", inline=False)
+        embed.add_field(name=f"💚 {self.opponent.display_name}", value=f"{opponent_bar} `{self.opponent_health}/100`", inline=False)
+        
+        if self.player_health <= 0:
+            update_balance(self.ctx.author.id, -self.bet)
+            update_balance(self.opponent.id, self.bet)
+            embed.add_field(name="💀 GAME OVER 💀", value=f"**{self.opponent.mention} wins the duel!**\n🎉 Won **{self.bet} petals**!", inline=False)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+            return
+        elif self.opponent_health <= 0:
+            update_balance(self.ctx.author.id, self.bet)
+            update_balance(self.opponent.id, -self.bet)
+            embed.add_field(name="💀 GAME OVER 💀", value=f"**{self.ctx.author.mention} wins the duel!**\n🎉 Won **{self.bet} petals**!", inline=False)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+            return
+        
+        self.turn = 'opponent' if attacker == 'player' else 'player'
+        embed.set_footer(text=f"🔁 {defender.display_name}'s turn to attack! Choose your weapon...")
+        
+        self.buttons_disabled = False
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    def create_health_bar(self, health):
+        filled = int(health / 10)
+        empty = 10 - filled
+        return "█" * filled + "░" * empty
+
+class DuelRequestView(View):
+    def __init__(self, ctx, opponent, bet):
+        super().__init__(timeout=30.0)
+        self.ctx = ctx
+        self.opponent = opponent
+        self.bet = bet
+        self.accepted = False
+    
+    @discord.ui.button(label="✅ Accept Duel", style=discord.ButtonStyle.success, emoji="⚔️")
+    async def accept_duel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.opponent:
+            await interaction.response.send_message("❌ Only the challenged player can accept this duel!", ephemeral=True)
+            return
+        
+        self.accepted = True
+        
+        if get_balance(self.ctx.author.id) < self.bet:
+            await interaction.response.send_message(f"❌ {self.ctx.author.mention} doesn't have enough petals for this duel!", ephemeral=True)
+            self.stop()
+            return
+        
+        if get_balance(self.opponent.id) < self.bet:
+            await interaction.response.send_message(f"❌ {self.opponent.mention} doesn't have enough petals to accept this duel!", ephemeral=True)
+            self.stop()
+            return
+        
+        embed = discord.Embed(
+            title="⚔️ DUEL STARTING! ⚔️",
+            description=f"{self.opponent.mention} accepted the challenge!\nGet ready to battle!",
+            color=0x00ff00
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+        
+        duel_view = DuelView(self.ctx, self.opponent, self.bet)
+        duel_embed = discord.Embed(
+            title="⚔️ PREPARE FOR BATTLE! ⚔️",
+            description=f"{self.ctx.author.mention} vs {self.opponent.mention}\n\n**Bet:** {self.bet} petals\n**Both players:** 100 HP\n\n{self.ctx.author.mention} attacks first!\n\n💀 Choose your weapon to strike! 💀",
+            color=0xffa500
+        )
+        await interaction.followup.send(embed=duel_embed, view=duel_view)
+        self.stop()
+    
+    @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.danger, emoji="❌")
+    async def decline_duel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.opponent:
+            await interaction.response.send_message("❌ Only the challenged player can decline this duel!", ephemeral=True)
+            return
+        
+        embed = discord.Embed(
+            title="❌ DUEL DECLINED",
+            description=f"{self.opponent.mention} declined the duel challenge!",
+            color=0xff0000
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+# --- NERFED BLACKJACK (House edge increased) ---
+@bot.command()
+async def blackjack(ctx, bet: int):
+    if get_balance(ctx.author.id) < bet or bet <= 0:
+        return await ctx.send("❌ Not enough petals!")
+    
+    p = [random.randint(1, 11), random.randint(1, 11)]
+    d = [random.randint(1, 11), random.randint(1, 11)]
+    
+    embed = discord.Embed(title="🃏 BLACKJACK", description=f"**Your hand:** {p} = **{sum(p)}**\n**Dealer shows:** [{d[0]}, ?]\n\nType `hit` or `stand`!", color=0xff69b4)
+    await ctx.send(embed=embed)
+    
+    def check(m): 
+        return m.author == ctx.author and m.content.lower() in ['hit', 'stand']
+    
+    try:
+        while sum(p) < 21:
+            msg = await bot.wait_for('message', check=check, timeout=20)
+            if msg.content.lower() == 'hit':
+                p.append(random.randint(1, 11))
+                if sum(p) > 21:
+                    break
+                embed = discord.Embed(title="🃏 BLACKJACK", description=f"**Your hand:** {p} = **{sum(p)}**\nType `hit` or `stand`!", color=0xff69b4)
+                await ctx.send(embed=embed)
+            else:
+                break
+    except:
+        pass
+    
+    pt, dt = sum(p), sum(d)
+    while dt < 17:
+        d.append(random.randint(1, 11))
+        dt = sum(d)
+    
+    if pt > 21:
+        update_balance(ctx.author.id, -bet)
+        result = "💥 BUST! You went over 21!"
+        color = 0xff0000
+    elif dt > 21:
+        win = int(bet * 0.95)
+        update_balance(ctx.author.id, win)
+        result = f"🎉 WIN! Dealer busted! You won {win} petals!"
+        color = 0x00ff00
+    elif pt > dt:
+        win = int(bet * 0.95)
+        update_balance(ctx.author.id, win)
+        result = f"🎉 WIN! You beat the dealer! You won {win} petals!"
+        color = 0x00ff00
+    elif pt <= dt:
+        update_balance(ctx.author.id, -bet)
+        result = "💔 LOSS! The dealer wins!"
+        color = 0xff0000
+    
+    embed = discord.Embed(title="🃏 GAME RESULT", description=f"**Your hand:** {p} = **{pt}**\n**Dealer hand:** {d} = **{dt}**\n\n{result}", color=color)
+    await ctx.send(embed=embed)
+
+# --- NERFED RPS (Lower win multiplier) ---
+@bot.command()
+async def rps(ctx, choice: str, bet: int):
+    if get_balance(ctx.author.id) < bet:
+        return await ctx.send("❌ Not enough petals!")
+    
+    valid_choices = ["rock", "paper", "scissors"]
+    user_choice = choice.lower()
+    
+    if user_choice not in valid_choices:
+        return await ctx.send("❌ Invalid choice! Choose: `rock`, `paper`, or `scissors`")
+    
+    bot_choice = random.choice(valid_choices)
+    choice_emojis = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
+    
+    if user_choice == bot_choice:
+        update_balance(ctx.author.id, -bet)
+        result = f"💔 TIE GOES TO HOUSE! -{bet} petals!"
+        color = 0xff0000
+    elif (user_choice == "rock" and bot_choice == "scissors") or (user_choice == "paper" and bot_choice == "rock") or (user_choice == "scissors" and bot_choice == "paper"):
+        win = int(bet * 0.9)
+        update_balance(ctx.author.id, win)
+        result = f"🎉 WIN! +{win} petals!"
+        color = 0x00ff00
+    else:
+        update_balance(ctx.author.id, -bet)
+        result = f"💔 LOSS! -{bet} petals!"
+        color = 0xff0000
+    
+    embed = discord.Embed(title="✂️ RPS", description=f"**You:** {choice_emojis[user_choice]} {user_choice}\n**Bot:** {choice_emojis[bot_choice]} {bot_choice}\n\n{result}", color=color)
+    await ctx.send(embed=embed)
 
 # --- AUTOMATED TASKS ---
 @tasks.loop(hours=1)
@@ -1021,7 +1339,7 @@ async def on_ready():
     if not hourly_leaderboard.is_running(): 
         hourly_leaderboard.start()
 
-# --- REWARD COMMANDS ---
+# --- REWARD COMMANDS (NERFED) ---
 @bot.command()
 async def daily(ctx):
     user_id = ctx.author.id
@@ -1035,7 +1353,7 @@ async def daily(ctx):
             minutes = int((remaining % 3600) // 60)
             return await ctx.send(f"⏰ You already claimed your daily reward! Come back in {hours}h {minutes}m!")
     
-    reward = random.randint(500, 1000)
+    reward = random.randint(300, 700)
     update_balance(user_id, reward)
     daily_cooldown[user_id] = now
     
@@ -1059,7 +1377,7 @@ async def weekly(ctx):
             hours = int((remaining % 86400) // 3600)
             return await ctx.send(f"⏰ You already claimed your weekly reward! Come back in {days}d {hours}h!")
     
-    reward = random.randint(3000, 7000)
+    reward = random.randint(2000, 5000)
     update_balance(user_id, reward)
     weekly_cooldown[user_id] = now
     
@@ -1082,7 +1400,7 @@ async def hourly(ctx):
             minutes = int(remaining // 60)
             return await ctx.send(f"⏰ You already claimed your hourly reward! Come back in {minutes}m!")
     
-    reward = random.randint(50, 150)
+    reward = random.randint(30, 80)
     update_balance(user_id, reward)
     hourly_cooldown[user_id] = now
     
@@ -1093,12 +1411,11 @@ async def hourly(ctx):
     )
     await ctx.send(embed=embed)
 
-# --- FARM, BEG, HUNT, WORK COMMANDS WITH DAILY COOLDOWN ---
+# --- FARM, BEG, HUNT, WORK COMMANDS WITH NERFED REWARDS ---
 @bot.command()
 async def beg(ctx):
     user_id = ctx.author.id
     
-    # Check cooldown
     on_cooldown, remaining = check_cooldown(beg_cooldown, user_id)
     if on_cooldown:
         time_str = format_time(remaining)
@@ -1110,8 +1427,7 @@ async def beg(ctx):
         embed.set_footer(text="You can only beg once per day!")
         return await ctx.send(embed=embed)
     
-    # Give reward
-    reward = random.randint(50, 150)
+    reward = random.randint(30, 100)
     update_balance(user_id, reward)
     set_cooldown(beg_cooldown, user_id)
     
@@ -1135,7 +1451,6 @@ async def beg(ctx):
 async def farm(ctx):
     user_id = ctx.author.id
     
-    # Check cooldown
     on_cooldown, remaining = check_cooldown(farm_cooldown, user_id)
     if on_cooldown:
         time_str = format_time(remaining)
@@ -1147,8 +1462,7 @@ async def farm(ctx):
         embed.set_footer(text="You can only farm once per day!")
         return await ctx.send(embed=embed)
     
-    # Give reward
-    reward = random.randint(200, 450)
+    reward = random.randint(120, 300)
     update_balance(user_id, reward)
     set_cooldown(farm_cooldown, user_id)
     
@@ -1172,7 +1486,6 @@ async def farm(ctx):
 async def hunt(ctx):
     user_id = ctx.author.id
     
-    # Check cooldown
     on_cooldown, remaining = check_cooldown(hunt_cooldown, user_id)
     if on_cooldown:
         time_str = format_time(remaining)
@@ -1184,8 +1497,7 @@ async def hunt(ctx):
         embed.set_footer(text="You can only hunt once per day!")
         return await ctx.send(embed=embed)
     
-    # Give reward
-    reward = random.randint(100, 300)
+    reward = random.randint(60, 200)
     update_balance(user_id, reward)
     set_cooldown(hunt_cooldown, user_id)
     
@@ -1209,7 +1521,6 @@ async def hunt(ctx):
 async def work(ctx):
     user_id = ctx.author.id
     
-    # Check cooldown
     on_cooldown, remaining = check_cooldown(work_cooldown, user_id)
     if on_cooldown:
         time_str = format_time(remaining)
@@ -1221,8 +1532,7 @@ async def work(ctx):
         embed.set_footer(text="You can only work once per day!")
         return await ctx.send(embed=embed)
     
-    # Give reward
-    reward = random.randint(150, 350)
+    reward = random.randint(90, 250)
     update_balance(user_id, reward)
     set_cooldown(work_cooldown, user_id)
     
@@ -1241,6 +1551,120 @@ async def work(ctx):
     )
     embed.set_footer(text="Come back tomorrow for another day of work!")
     await ctx.send(embed=embed)
+
+# --- GIFTING SYSTEM ---
+@bot.command()
+async def gift(ctx, member: discord.Member, amount: int):
+    """Gift petals to another player! Usage: b!gift @player <amount>"""
+    
+    if member == ctx.author:
+        return await ctx.send("❌ You can't gift petals to yourself!")
+    
+    if member.bot:
+        return await ctx.send("❌ You can't gift petals to a bot!")
+    
+    if amount <= 0:
+        return await ctx.send("❌ Gift amount must be positive!")
+    
+    sender_balance = get_balance(ctx.author.id)
+    if sender_balance < amount:
+        return await ctx.send(f"❌ You don't have enough petals! You have **{sender_balance}** petals but tried to gift **{amount}**!")
+    
+    user_id = ctx.author.id
+    today = datetime.now().date()
+    
+    if user_id in gift_cooldown:
+        last_gift_date, total_gifted = gift_cooldown[user_id]
+        if last_gift_date == today:
+            if total_gifted + amount > DAILY_GIFT_LIMIT:
+                remaining = DAILY_GIFT_LIMIT - total_gifted
+                return await ctx.send(f"❌ You've reached your daily gifting limit! You can only gift **{DAILY_GIFT_LIMIT:,}** petals per day.\nYou have **{remaining:,}** petals remaining today!")
+            new_total = total_gifted + amount
+        else:
+            new_total = amount
+    else:
+        new_total = amount
+    
+    if amount > DAILY_GIFT_LIMIT:
+        return await ctx.send(f"❌ You can only gift up to **{DAILY_GIFT_LIMIT:,}** petals per day!")
+    
+    update_balance(ctx.author.id, -amount)
+    update_balance(member.id, amount)
+    
+    gift_cooldown[user_id] = (today, new_total)
+    
+    embed = discord.Embed(
+        title="🎁 GIFT SENT! 🎁",
+        description=f"{ctx.author.mention} gifted **{amount:,} petals** to {member.mention}!",
+        color=0xff69b4
+    )
+    
+    remaining_today = DAILY_GIFT_LIMIT - new_total
+    embed.add_field(name="📊 Your Daily Gifting Status", value=f"Used today: **{new_total:,}** / {DAILY_GIFT_LIMIT:,}\nRemaining: **{remaining_today:,}** petals", inline=False)
+    embed.set_footer(text=f"Your new balance: {get_balance(ctx.author.id):,} petals")
+    
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def giftstats(ctx):
+    """Check your daily gifting stats"""
+    user_id = ctx.author.id
+    today = datetime.now().date()
+    
+    if user_id in gift_cooldown:
+        last_gift_date, total_gifted = gift_cooldown[user_id]
+        if last_gift_date == today:
+            remaining = DAILY_GIFT_LIMIT - total_gifted
+            embed = discord.Embed(
+                title="🎁 Your Daily Gifting Stats",
+                description=f"**Today's Gifts:** {total_gifted:,} / {DAILY_GIFT_LIMIT:,} petals",
+                color=0xff69b4
+            )
+            embed.add_field(name="✅ Remaining Today", value=f"{remaining:,} petals", inline=True)
+            embed.add_field(name="📅 Reset Time", value="Midnight UTC", inline=True)
+            await ctx.send(embed=embed)
+        else:
+            embed = discord.Embed(
+                title="🎁 Your Daily Gifting Stats",
+                description=f"**Today's Gifts:** 0 / {DAILY_GIFT_LIMIT:,} petals",
+                color=0xff69b4
+            )
+            embed.add_field(name="✅ Remaining Today", value=f"{DAILY_GIFT_LIMIT:,} petals", inline=True)
+            embed.add_field(name="📅 Reset Time", value="Midnight UTC", inline=True)
+            await ctx.send(embed=embed)
+    else:
+        embed = discord.Embed(
+            title="🎁 Your Daily Gifting Stats",
+            description=f"**Today's Gifts:** 0 / {DAILY_GIFT_LIMIT:,} petals",
+            color=0xff69b4
+        )
+        embed.add_field(name="✅ Remaining Today", value=f"{DAILY_GIFT_LIMIT:,} petals", inline=True)
+        embed.add_field(name="📅 Reset Time", value="Midnight UTC", inline=True)
+        await ctx.send(embed=embed)
+
+@bot.command()
+async def reset_gift(ctx, user: discord.Member = None):
+    """Reset a user's daily gifting limit (Admin only)"""
+    if ctx.author.name not in ADMINS:
+        return await ctx.send("❌ You don't have permission to use this command!")
+    
+    target = user if user else ctx.author
+    
+    if target.id in gift_cooldown:
+        del gift_cooldown[target.id]
+        embed = discord.Embed(
+            title="✅ Gift Cooldown Reset!",
+            description=f"Reset daily gifting limit for {target.mention}",
+            color=0x00ff00
+        )
+        await ctx.send(embed=embed)
+    else:
+        embed = discord.Embed(
+            title="ℹ️ No Cooldown Found",
+            description=f"{target.mention} hasn't gifted any petals today!",
+            color=0xffa500
+        )
+        await ctx.send(embed=embed)
 
 # --- ADMIN COMMANDS ---
 @bot.command()
@@ -1274,10 +1698,8 @@ async def give(ctx, member: discord.Member, amount: int):
     embed = discord.Embed(title="✅ Petals Given!", description=f"Gave **{amount} petals** to {member.mention}", color=0x00ff00)
     await ctx.send(embed=embed)
 
-# --- RESET COOLDOWNS COMMAND (Admin Only) ---
 @bot.command()
 async def reset_cooldowns(ctx, user: discord.Member = None):
-    """Reset cooldowns for a user (Admin only)"""
     if ctx.author.name not in ADMINS:
         return await ctx.send("❌ You don't have permission to use this command!")
     
@@ -1299,10 +1721,8 @@ async def reset_cooldowns(ctx, user: discord.Member = None):
     )
     await ctx.send(embed=embed)
 
-# --- COOLDOWN STATUS COMMAND ---
 @bot.command()
 async def cooldowns(ctx):
-    """Check your cooldown status for daily commands"""
     user_id = ctx.author.id
     
     embed = discord.Embed(
@@ -1311,28 +1731,24 @@ async def cooldowns(ctx):
         color=0xffb7c5
     )
     
-    # Check beg cooldown
     on_cooldown, remaining = check_cooldown(beg_cooldown, user_id)
     if on_cooldown:
         embed.add_field(name="🌸 Beg", value=f"Available in: {format_time(remaining)}", inline=False)
     else:
         embed.add_field(name="🌸 Beg", value="✅ Available now!", inline=False)
     
-    # Check farm cooldown
     on_cooldown, remaining = check_cooldown(farm_cooldown, user_id)
     if on_cooldown:
         embed.add_field(name="🚜 Farm", value=f"Available in: {format_time(remaining)}", inline=False)
     else:
         embed.add_field(name="🚜 Farm", value="✅ Available now!", inline=False)
     
-    # Check hunt cooldown
     on_cooldown, remaining = check_cooldown(hunt_cooldown, user_id)
     if on_cooldown:
         embed.add_field(name="🏹 Hunt", value=f"Available in: {format_time(remaining)}", inline=False)
     else:
         embed.add_field(name="🏹 Hunt", value="✅ Available now!", inline=False)
     
-    # Check work cooldown
     on_cooldown, remaining = check_cooldown(work_cooldown, user_id)
     if on_cooldown:
         embed.add_field(name="💼 Work", value=f"Available in: {format_time(remaining)}", inline=False)
@@ -1380,8 +1796,8 @@ async def mines(ctx, bet: int):
     if get_balance(ctx.author.id) < bet or bet <= 0:
         return await ctx.send("❌ Not enough petals!")
     
-    bombs = random.sample(range(1, 10), 3)
-    embed = discord.Embed(title="💣 MINESWEEPER", description=f"**Bet:** {bet} petals\nFind safe flowers!", color=0xff69b4)
+    bombs = random.sample(range(1, 10), 4)
+    embed = discord.Embed(title="💣 MINESWEEPER", description=f"**Bet:** {bet} petals\n⚠️ 4 bombs hidden! Find safe flowers!", color=0xff69b4)
     await ctx.send(embed=embed, view=MinesView(ctx, bet, bombs))
 
 @bot.command()
@@ -1393,93 +1809,12 @@ async def color(ctx, bet: int):
     await ctx.send(embed=embed, view=ColorView(ctx, bet))
 
 @bot.command()
-async def blackjack(ctx, bet: int):
-    if get_balance(ctx.author.id) < bet or bet <= 0:
-        return await ctx.send("❌ Not enough petals!")
-    
-    p = [random.randint(1, 11), random.randint(1, 11)]
-    d = [random.randint(1, 11), random.randint(1, 11)]
-    
-    embed = discord.Embed(title="🃏 BLACKJACK", description=f"**Your hand:** {p} = **{sum(p)}**\n**Dealer shows:** [{d[0]}, ?]\n\nType `hit` or `stand`!", color=0xff69b4)
-    await ctx.send(embed=embed)
-    
-    def check(m): 
-        return m.author == ctx.author and m.content.lower() in ['hit', 'stand']
-    
-    try:
-        while sum(p) < 21:
-            msg = await bot.wait_for('message', check=check, timeout=20)
-            if msg.content.lower() == 'hit':
-                p.append(random.randint(1, 11))
-                if sum(p) > 21:
-                    break
-                embed = discord.Embed(title="🃏 BLACKJACK", description=f"**Your hand:** {p} = **{sum(p)}**\nType `hit` or `stand`!", color=0xff69b4)
-                await ctx.send(embed=embed)
-            else:
-                break
-    except:
-        pass
-    
-    pt, dt = sum(p), sum(d)
-    while dt < 17:
-        d.append(random.randint(1, 11))
-        dt = sum(d)
-    
-    if pt > 21:
-        update_balance(ctx.author.id, -bet)
-        result = "💥 BUST! You went over 21!"
-        color = 0xff0000
-    elif dt > 21 or pt > dt:
-        update_balance(ctx.author.id, bet)
-        result = "🎉 WIN! You beat the dealer!"
-        color = 0x00ff00
-    elif pt < dt:
-        update_balance(ctx.author.id, -bet)
-        result = "💔 LOSS! The dealer wins!"
-        color = 0xff0000
-    else:
-        result = "🤝 TIE! Your bet is returned!"
-        color = 0xffa500
-    
-    embed = discord.Embed(title="🃏 GAME RESULT", description=f"**Your hand:** {p} = **{pt}**\n**Dealer hand:** {d} = **{dt}**\n\n{result}", color=color)
-    await ctx.send(embed=embed)
-
-@bot.command()
 async def dice(ctx, bet: int):
     if get_balance(ctx.author.id) < bet:
         return await ctx.send("❌ Not enough petals!")
     
     embed = discord.Embed(title="🎲 DICE DUEL", description=f"**Bet:** {bet} petals\nClick the button to roll!", color=0xffa500)
     await ctx.send(embed=embed, view=DiceDuelView(ctx, bet))
-
-@bot.command()
-async def rps(ctx, choice: str, bet: int):
-    if get_balance(ctx.author.id) < bet:
-        return await ctx.send("❌ Not enough petals!")
-    
-    valid_choices = ["rock", "paper", "scissors"]
-    user_choice = choice.lower()
-    
-    if user_choice not in valid_choices:
-        return await ctx.send("❌ Invalid choice! Choose: `rock`, `paper`, or `scissors`")
-    
-    bot_choice = random.choice(valid_choices)
-    choice_emojis = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
-    
-    if user_choice == bot_choice:
-        result = "🤝 TIE! 🤝"
-        color = 0xffa500
-    elif (user_choice == "rock" and bot_choice == "scissors") or (user_choice == "paper" and bot_choice == "rock") or (user_choice == "scissors" and bot_choice == "paper"):
-        update_balance(ctx.author.id, bet)
-        result = "🎉 WIN! 🎉"
-        color = 0x00ff00
-    else:
-        update_balance(ctx.author.id, -bet)
-        result = "💔 LOSS! 💔"
-        color = 0xff0000
-    
-    embed = discord.Embed(title="✂️ RPS", description=f"**You:** {choice_emojis[user_choice]} {user_choice}\n**Bot:** {choice_emojis[bot_choice]} {bot_choice}\n\n{result}", color=color)
-    await ctx.send(embed=embed)
 
 @bot.command()
 async def slots(ctx, bet: int):
@@ -1534,7 +1869,7 @@ async def treasure(ctx, bet: int):
     if get_balance(ctx.author.id) < bet or bet <= 0:
         return await ctx.send("❌ Not enough petals!")
     
-    embed = discord.Embed(title="💎 TREASURE HUNT", description=f"**Bet:** {bet} petals\nFind the treasure in 2 attempts!", color=0xffa500)
+    embed = discord.Embed(title="💎 TREASURE HUNT", description=f"**Bet:** {bet} petals\nFind the treasure in 2 attempts! (6 spots)", color=0xffa500)
     await ctx.send(embed=embed, view=TreasureHuntView(ctx, bet))
 
 @bot.command()
@@ -1573,14 +1908,44 @@ async def redeem(ctx):
     await ctx.send(embed=embed, view=RedeemStarterView())
 
 @bot.command()
+async def duel(ctx, opponent: discord.Member, bet: int):
+    """Challenge another player to a duel! Usage: b!duel @player <amount>"""
+    if opponent == ctx.author:
+        return await ctx.send("❌ You can't duel yourself!")
+    
+    if opponent.bot:
+        return await ctx.send("❌ You can't duel a bot!")
+    
+    if bet <= 0:
+        return await ctx.send("❌ Bet must be positive!")
+    
+    if bet < 50:
+        return await ctx.send("❌ Minimum duel bet is 50 petals!")
+    
+    if get_balance(ctx.author.id) < bet:
+        return await ctx.send(f"❌ You don't have enough petals! You need **{bet} petals** to start this duel!")
+    
+    embed = discord.Embed(
+        title="⚔️ DUEL CHALLENGE! ⚔️",
+        description=f"{ctx.author.mention} has challenged {opponent.mention} to a duel!\n\n**💰 Bet:** {bet} petals\n**💀 Winner takes all!**\n\n{opponent.mention}, do you accept the challenge?",
+        color=0xffa500
+    )
+    embed.add_field(name="⚔️ Combat Rules", value="• Turn-based combat\n• Choose weapons to attack\n• Critical hits possible!\n• 10% chance to miss\n• First to 0 HP loses\n• Surrender option available", inline=False)
+    
+    view = DuelRequestView(ctx, opponent, bet)
+    await ctx.send(embed=embed, view=view)
+
+@bot.command()
 async def help(ctx):
     embed = discord.Embed(title="🌸 Blossom Garden - Help Menu", description="Here's everything you can do:", color=0xffb7c5)
     
     embed.add_field(name="🌱 **Daily Earnings**", value="`beg`, `farm`, `hunt`, `work` - Each once per day!\n`daily`, `weekly`, `hourly` - Time-based rewards!", inline=False)
+    embed.add_field(name="🎁 **Gifting**", value="`gift @player <amount>` - Gift petals to friends!\n`giftstats` - Check your daily gifting limit\n*(Max 1,000,000 petals per day)*", inline=False)
+    embed.add_field(name="⚔️ **PvP Game**", value="`duel @player <amount>` - Challenge other players to a duel!", inline=False)
     embed.add_field(name="🎲 **Casino Games**", value="`crash`, `mines`, `color`, `blackjack`, `dice`, `rps`, `slots`, `coinflip`, `higherlower`, `roulette`, `tower`, `scratch`, `treasure`, `roulettegun`, `race`, `poker`", inline=False)
     embed.add_field(name="ℹ️ **Info**", value="`bal` - Check balance\n`lb` - Leaderboard\n`cooldowns` - Check daily command status", inline=False)
-    embed.add_field(name="🎟️ **Admin**", value="`gen`, `setup`, `give`, `reset_cooldowns`", inline=False)
-    embed.set_footer(text="🌸 16+ Exciting Games! Daily commands reset every 24 hours! 🌸")
+    embed.add_field(name="🎟️ **Admin**", value="`gen`, `setup`, `give`, `reset_cooldowns`, `reset_gift`", inline=False)
+    embed.set_footer(text="🌸 All games have been balanced for fair play! Duel your friends for big wins! 🌸")
     await ctx.send(embed=embed)
 
 # --- ADMIN MANAGEMENT ---
