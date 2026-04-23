@@ -702,14 +702,21 @@ class TreasureHuntView(View):
             button.disabled = True
             await interaction.response.edit_message(content=f"Nothing at spot {spot}! Try again! (1 attempt remaining)", view=self)
 
-# --- RUSSIAN ROULETTE GAME ---
+# --- DEADLY RUSSIAN ROULETTE GAME (3 Bullets, 6 Chambers) ---
 class RussianRouletteView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30.0)
         self.ctx = ctx
         self.bet = bet
-        self.bullet_position = random.randint(1, 6)
-        self.chamber = 1
+        # Place 3 bullets randomly in 6 chambers
+        chambers = [False] * 6
+        bullet_positions = random.sample(range(6), 3)
+        for pos in bullet_positions:
+            chambers[pos] = True
+        self.chambers = chambers
+        self.current_chamber = 0
+        self.spins = 0
+        self.max_spins = 3  # Max 3 pulls per game (can't pull all 6 or it's guaranteed death)
     
     @discord.ui.button(label="🔫 PULL TRIGGER", style=discord.ButtonStyle.danger, emoji="🔫", row=0)
     async def pull(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -717,25 +724,107 @@ class RussianRouletteView(View):
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
         
-        if self.chamber == self.bullet_position:
+        self.spins += 1
+        
+        # Check if current chamber has a bullet
+        if self.chambers[self.current_chamber]:
             update_balance(self.ctx.author.id, -self.bet)
             embed = discord.Embed(
-                title="🔫 RUSSIAN ROULETTE 🔫",
-                description=f"**BANG!** The chamber was loaded!\n💔 You lost **{self.bet} petals**!",
+                title="💀 RUSSIAN ROULETTE 💀",
+                description=f"**BANG! BANG! BANG!**\nChamber {self.current_chamber + 1} had a bullet!\n💔 You lost **{self.bet} petals**!",
                 color=0xff0000
             )
+            embed.add_field(name="💀 Bullets Remaining", value=f"{sum(self.chambers)}/6 chambers loaded", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
-        else:
-            win = self.bet * 2
+            return
+        
+        # Move to next chamber
+        self.current_chamber += 1
+        
+        # Calculate remaining bullets
+        remaining_bullets = sum(self.chambers[self.current_chamber:])
+        
+        # If survived all allowed pulls
+        if self.spins >= self.max_spins:
+            win = self.bet * 3  # Higher reward because it's much riskier
             update_balance(self.ctx.author.id, win - self.bet)
+            
             embed = discord.Embed(
                 title="🔫 RUSSIAN ROULETTE 🔫",
-                description=f"**Click!** The chamber was empty!\n🎉 You survived and won **{win} petals**!",
+                description=f"**Click! Click! Click!**\nSomehow you survived {self.max_spins} pulls with 3 bullets loaded!\n🎉 You won **{int(win)} petals**!",
                 color=0x00ff00
             )
+            embed.add_field(name="💀 Bullets Remaining", value=f"{remaining_bullets} bullets still in chambers", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
+            return
+        
+        # Still alive, continue game
+        remaining_pulls = self.max_spins - self.spins
+        survival_chance = self.calculate_survival_chance()
+        
+        embed = discord.Embed(
+            title="🔫 RUSSIAN ROULETTE 🔫",
+            description=f"**Click!** Chamber {self.current_chamber} was empty!\nYou have **{remaining_pulls}** pull(s) remaining.\n💀 {remaining_bullets} bullet(s) still in the {6 - self.current_chamber} remaining chambers!",
+            color=0xffa500
+        )
+        embed.add_field(name="📊 Survival Chance", value=f"{survival_chance:.1f}%", inline=True)
+        embed.add_field(name="💰 Potential Win", value=f"{int(self.bet * 3)} petals", inline=True)
+        embed.add_field(name="🎯 Risk Level", value="🔴🔴🔴 EXTREME", inline=False)
+        await interaction.response.edit_message(embed=embed, view=self)
+    
+    def calculate_survival_chance(self):
+        """Calculate chance of surviving remaining pulls"""
+        remaining_chambers = 6 - self.current_chamber
+        remaining_bullets = sum(self.chambers[self.current_chamber:])
+        remaining_pulls = self.max_spins - self.spins
+        
+        if remaining_pulls <= 0 or remaining_chambers <= 0:
+            return 100.0
+        
+        # Calculate probability of surviving all remaining pulls
+        chance = 1.0
+        for i in range(remaining_pulls):
+            if remaining_chambers - i <= 0:
+                chance = 0
+                break
+            chance *= (remaining_chambers - i - remaining_bullets) / (remaining_chambers - i)
+        
+        return chance * 100
+    
+    @discord.ui.button(label="💰 CASHOUT EARLY", style=discord.ButtonStyle.success, emoji="💰", row=1)
+    async def cashout(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
+            return
+        
+        # Cashout with progressive rewards based on risk taken
+        remaining_bullets = sum(self.chambers[self.current_chamber:])
+        
+        if self.spins == 0:
+            cashout_amount = int(self.bet * 0.7)  # 70% return - take a small loss
+            risk_text = "🛡️ Coward's Way Out"
+        elif self.spins == 1:
+            cashout_amount = int(self.bet * 1.2)  # 120% return
+            risk_text = "😅 Smart Move"
+        elif self.spins == 2:
+            cashout_amount = int(self.bet * 2.0)  # 200% return
+            risk_text = "🎲 Bold Decision"
+        else:
+            cashout_amount = int(self.bet * 2.8)  # 280% return
+            risk_text = "🔥 Risk Taker"
+        
+        update_balance(self.ctx.author.id, cashout_amount - self.bet)
+        
+        embed = discord.Embed(
+            title="🔫 RUSSIAN ROULETTE 🔫",
+            description=f"You cashed out after **{self.spins}** pull(s)!\n🏆 **{risk_text}**\n💰 You won **{cashout_amount} petals**!",
+            color=0x00ff00
+        )
+        embed.add_field(name="💀 Bullets Still Loaded", value=f"{remaining_bullets} bullets in remaining chambers", inline=False)
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
 
 # --- HORSE RACING GAME ---
 class RaceView(View):
@@ -1453,7 +1542,13 @@ async def roulettegun(ctx, bet: int):
     if get_balance(ctx.author.id) < bet or bet <= 0:
         return await ctx.send("❌ Not enough petals!")
     
-    embed = discord.Embed(title="🔫 RUSSIAN ROULETTE", description=f"**Bet:** {bet} petals\nPull the trigger and test your luck!", color=0xff0000)
+    embed = discord.Embed(
+        title="💀 RUSSIAN ROULETTE - EXTREME MODE 💀",
+        description=f"**Bet:** {bet} petals\n⚠️ **3 BULLETS, 6 CHAMBERS!**\n💀 50% chance to die on first pull!\nPull the trigger up to 3 times or cash out early!\n\n*Each safe pull increases your reward multiplier!*",
+        color=0xff0000
+    )
+    embed.add_field(name="💀 Death Odds", value="First pull: 50%\nSecond pull: 60%\nThird pull: 75%", inline=True)
+    embed.add_field(name="💰 Max Win", value=f"{bet * 3} petals (3x bet)", inline=True)
     await ctx.send(embed=embed, view=RussianRouletteView(ctx, bet))
 
 @bot.command()
