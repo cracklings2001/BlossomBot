@@ -9,15 +9,35 @@ from keep_alive import keep_alive
 import math
 from datetime import datetime, timedelta
 import json
-from pymongo import MongoClient
+
+# Try to import pymongo, but don't fail if not installed
+try:
+    from pymongo import MongoClient
+    MONGO_AVAILABLE = True
+except ImportError:
+    MONGO_AVAILABLE = False
+    print("⚠️ pymongo not installed, using local file storage")
 
 # --- PERMANENT DATABASE SYSTEM for RENDER (MongoDB Atlas) ---
 # Check if running on Render
 IS_RENDER = os.getenv('RENDER', False)
 
-# MongoDB Connection
+# MongoDB Connection - Initialize as None first
+mongo_client = None
+db = None
+economy_collection = None
+inventory_collection = None
+pets_collection = None
+cooldowns_collection = None
+redeem_collection = None
+channels_collection = None
+buffs_collection = None
+USE_MONGODB = False
+
+# Get MongoDB URI from environment
 MONGODB_URI = os.getenv('MONGODB_URI')
-if MONGODB_URI:
+
+if MONGODB_URI and MONGO_AVAILABLE:
     try:
         mongo_client = MongoClient(MONGODB_URI)
         db = mongo_client['blossom_garden_bot']
@@ -35,10 +55,14 @@ if MONGODB_URI:
         print("✅ Connected to MongoDB Atlas for persistent storage!")
     except Exception as e:
         print(f"❌ MongoDB connection failed: {e}")
+        print("⚠️ Falling back to local file storage")
         USE_MONGODB = False
+elif MONGODB_URI and not MONGO_AVAILABLE:
+    print("⚠️ pymongo not installed. Install with: pip install pymongo dnspython")
+    print("⚠️ Falling back to local file storage")
 else:
-    USE_MONGODB = False
-    print("⚠️ MongoDB not configured, using local file storage")
+    print("⚠️ MONGODB_URI not found in environment variables")
+    print("⚠️ Using local file storage (data will persist locally but not across Render restarts)")
 
 # File paths for local backup
 DATA_FILES = {
@@ -56,52 +80,73 @@ DATA_FILES = {
 if not os.path.exists('data'):
     os.makedirs('data')
 
+# Initialize all global variables
+economy = {}
+player_inventory = {}
+player_pets = {}
+pet_equipped = {}
+player_buffs = {}
+player_permanents = {}
+beg_cooldown = {}
+farm_cooldown = {}
+hunt_cooldown = {}
+work_cooldown = {}
+daily_cooldown = {}
+weekly_cooldown = {}
+hourly_cooldown = {}
+gift_cooldown = {}
+pet_feed_cooldown = {}
+pet_play_cooldown = {}
+pet_cooldown = {}
+redeem_codes = {}
+server_channels = {}
+
 def load_all_data():
     """Load all data from MongoDB or local files"""
     global economy, player_inventory, player_pets, pet_equipped, player_buffs, player_permanents
     global beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown
     global daily_cooldown, weekly_cooldown, hourly_cooldown, gift_cooldown
     global pet_feed_cooldown, pet_play_cooldown, pet_cooldown
-    global redeem_codes, server_channels
+    global redeem_codes, server_channels, USE_MONGODB
     
-    if USE_MONGODB:
+    if USE_MONGODB and MONGODB_URI:
         try:
             # Load from MongoDB
             economy_data = economy_collection.find_one({'_id': 'economy'})
-            economy = economy_data.get('data', {}) if economy_data else {}
-            economy = {int(k): v for k, v in economy.items()}
+            temp_economy = economy_data.get('data', {}) if economy_data else {}
+            economy = {int(k): v for k, v in temp_economy.items()}
             
             inventory_data = inventory_collection.find_one({'_id': 'inventory'})
-            player_inventory = inventory_data.get('data', {}) if inventory_data else {}
-            player_inventory = {int(k): v for k, v in player_inventory.items()}
+            temp_inventory = inventory_data.get('data', {}) if inventory_data else {}
+            player_inventory = {int(k): v for k, v in temp_inventory.items()}
             
             pets_data = pets_collection.find_one({'_id': 'pets'})
-            player_pets = pets_data.get('data', {}) if pets_data else {}
-            player_pets = {int(k): v for k, v in player_pets.items()}
+            temp_pets = pets_data.get('data', {}) if pets_data else {}
+            player_pets = {int(k): v for k, v in temp_pets.items()}
             
             pet_equipped_data = pets_collection.find_one({'_id': 'pet_equipped'})
             pet_equipped = pet_equipped_data.get('data', {}) if pet_equipped_data else {}
             pet_equipped = {int(k): v for k, v in pet_equipped.items()}
             
             buffs_data = buffs_collection.find_one({'_id': 'buffs'})
-            player_buffs = buffs_data.get('data', {}) if buffs_data else {}
-            player_buffs = {int(k): v for k, v in player_buffs.items()}
+            temp_buffs = buffs_data.get('data', {}) if buffs_data else {}
+            player_buffs = {int(k): v for k, v in temp_buffs.items()}
             
             cooldowns_data = cooldowns_collection.find_one({'_id': 'cooldowns'})
             cooldowns = cooldowns_data.get('data', {}) if cooldowns_data else {}
             
             # Reset cooldown dictionaries
-            beg_cooldown = {}
-            farm_cooldown = {}
-            hunt_cooldown = {}
-            work_cooldown = {}
-            daily_cooldown = {}
-            weekly_cooldown = {}
-            hourly_cooldown = {}
-            gift_cooldown = {}
-            pet_feed_cooldown = {}
-            pet_play_cooldown = {}
-            pet_cooldown = {}
+            beg_cooldown.clear()
+            farm_cooldown.clear()
+            hunt_cooldown.clear()
+            work_cooldown.clear()
+            daily_cooldown.clear()
+            weekly_cooldown.clear()
+            hourly_cooldown.clear()
+            gift_cooldown.clear()
+            pet_feed_cooldown.clear()
+            pet_play_cooldown.clear()
+            pet_cooldown.clear()
             
             # Process cooldowns
             for user_id, data in cooldowns.items():
@@ -133,12 +178,15 @@ def load_all_data():
             redeem_codes = redeem_data.get('data', {}) if redeem_data else {}
             
             channels_data = channels_collection.find_one({'_id': 'channels'})
-            server_channels = channels_data.get('data', {}) if channels_data else {}
-            server_channels = {int(k): v for k, v in server_channels.items()}
+            temp_channels = channels_data.get('data', {}) if channels_data else {}
+            server_channels = {int(k): v for k, v in temp_channels.items()}
+            
+            player_permanents = {}
             
             print("✅ Loaded all data from MongoDB Atlas")
         except Exception as e:
             print(f"❌ Error loading from MongoDB: {e}")
+            print("⚠️ Falling back to local file storage")
             USE_MONGODB = False
             load_from_files()
     else:
@@ -154,51 +202,51 @@ def load_from_files():
     
     try:
         with open(DATA_FILES['economy'], 'r') as f:
-            economy = json.load(f)
-            economy = {int(k): v for k, v in economy.items()}
+            temp_economy = json.load(f)
+            economy = {int(k): v for k, v in temp_economy.items()}
     except:
         economy = {}
     
     try:
         with open(DATA_FILES['inventory'], 'r') as f:
-            inventory_data = json.load(f)
-            player_inventory = {int(k): v for k, v in inventory_data.items()}
+            temp_inventory = json.load(f)
+            player_inventory = {int(k): v for k, v in temp_inventory.items()}
     except:
         player_inventory = {}
     
     try:
         with open(DATA_FILES['pets'], 'r') as f:
-            pets_data = json.load(f)
-            player_pets = {int(k): v for k, v in pets_data.items()}
+            temp_pets = json.load(f)
+            player_pets = {int(k): v for k, v in temp_pets.items()}
     except:
         player_pets = {}
     
     try:
         with open(DATA_FILES['pets'] + '_equipped', 'r') as f:
-            pet_equipped_data = json.load(f)
-            pet_equipped = {int(k): v for k, v in pet_equipped_data.items()}
+            temp_equipped = json.load(f)
+            pet_equipped = {int(k): v for k, v in temp_equipped.items()}
     except:
         pet_equipped = {}
     
     try:
         with open(DATA_FILES['buffs'], 'r') as f:
-            buffs_data = json.load(f)
-            player_buffs = {int(k): v for k, v in buffs_data.items()}
+            temp_buffs = json.load(f)
+            player_buffs = {int(k): v for k, v in temp_buffs.items()}
     except:
         player_buffs = {}
     
-    # Initialize cooldown dictionaries
-    beg_cooldown = {}
-    farm_cooldown = {}
-    hunt_cooldown = {}
-    work_cooldown = {}
-    daily_cooldown = {}
-    weekly_cooldown = {}
-    hourly_cooldown = {}
-    gift_cooldown = {}
-    pet_feed_cooldown = {}
-    pet_play_cooldown = {}
-    pet_cooldown = {}
+    # Clear cooldown dictionaries
+    beg_cooldown.clear()
+    farm_cooldown.clear()
+    hunt_cooldown.clear()
+    work_cooldown.clear()
+    daily_cooldown.clear()
+    weekly_cooldown.clear()
+    hourly_cooldown.clear()
+    gift_cooldown.clear()
+    pet_feed_cooldown.clear()
+    pet_play_cooldown.clear()
+    pet_cooldown.clear()
     
     try:
         with open(DATA_FILES['cooldowns'], 'r') as f:
@@ -238,17 +286,17 @@ def load_from_files():
     
     try:
         with open(DATA_FILES['channels'], 'r') as f:
-            channels_data = json.load(f)
-            server_channels = {int(k): v for k, v in channels_data.items()}
+            temp_channels = json.load(f)
+            server_channels = {int(k): v for k, v in temp_channels.items()}
     except:
         server_channels = {}
     
     player_permanents = {}
-    print("⚠️ Using local file storage")
+    print("✅ Loaded data from local files")
 
 def save_all_data():
     """Save all data to MongoDB or local files"""
-    if USE_MONGODB:
+    if USE_MONGODB and MONGODB_URI:
         try:
             # Save to MongoDB
             economy_collection.update_one({'_id': 'economy'}, {'$set': {'data': economy}}, upsert=True)
@@ -305,16 +353,24 @@ def save_all_data():
 
 def save_to_files():
     """Save data to local JSON files (backup)"""
+    # Convert int keys to string for JSON serialization
+    economy_str_keys = {str(k): v for k, v in economy.items()}
+    inventory_str_keys = {str(k): v for k, v in player_inventory.items()}
+    pets_str_keys = {str(k): v for k, v in player_pets.items()}
+    pet_equipped_str_keys = {str(k): v for k, v in pet_equipped.items()}
+    buffs_str_keys = {str(k): v for k, v in player_buffs.items()}
+    channels_str_keys = {str(k): v for k, v in server_channels.items()}
+    
     with open(DATA_FILES['economy'], 'w') as f:
-        json.dump(economy, f, indent=4)
+        json.dump(economy_str_keys, f, indent=4)
     with open(DATA_FILES['inventory'], 'w') as f:
-        json.dump(player_inventory, f, indent=4)
+        json.dump(inventory_str_keys, f, indent=4)
     with open(DATA_FILES['pets'], 'w') as f:
-        json.dump(player_pets, f, indent=4)
+        json.dump(pets_str_keys, f, indent=4)
     with open(DATA_FILES['pets'] + '_equipped', 'w') as f:
-        json.dump(pet_equipped, f, indent=4)
+        json.dump(pet_equipped_str_keys, f, indent=4)
     with open(DATA_FILES['buffs'], 'w') as f:
-        json.dump(player_buffs, f, indent=4)
+        json.dump(buffs_str_keys, f, indent=4)
     
     # Save cooldowns
     cooldowns = {}
@@ -356,7 +412,7 @@ def save_to_files():
     with open(DATA_FILES['redeem'], 'w') as f:
         json.dump(redeem_codes, f, indent=4)
     with open(DATA_FILES['channels'], 'w') as f:
-        json.dump(server_channels, f, indent=4)
+        json.dump(channels_str_keys, f, indent=4)
 
 def update_balance(user_id, amount):
     global economy
@@ -427,29 +483,7 @@ bot.remove_command('help')
 # --- ADMIN LIST ---
 ADMINS = ["dispute12", "xion0624"]
 
-# --- DATABASE INITIALIZATION ---
-# Initialize all global variables
-economy = {}
-player_inventory = {}
-player_pets = {}
-pet_equipped = {}
-player_buffs = {}
-player_permanents = {}
-beg_cooldown = {}
-farm_cooldown = {}
-hunt_cooldown = {}
-work_cooldown = {}
-daily_cooldown = {}
-weekly_cooldown = {}
-hourly_cooldown = {}
-gift_cooldown = {}
-pet_feed_cooldown = {}
-pet_play_cooldown = {}
-pet_cooldown = {}
-redeem_codes = {}
-server_channels = {}
-
-# Load all existing data
+# Load all data
 load_all_data()
 
 # --- SHOP ITEMS ---
@@ -609,6 +643,8 @@ pet_shop_items = {
         "xp_per_level": 25000
     }
 }
+
+DAILY_GIFT_LIMIT = 1000000
 
 # --- UI: REDEEM MODAL ---
 class RedeemModal(Modal, title="🌸 Redeem Petals - Enter Your Code"):
@@ -3580,8 +3616,6 @@ async def on_ready():
     
     if not hourly_leaderboard.is_running(): 
         hourly_leaderboard.start()
-
-DAILY_GIFT_LIMIT = 1000000
 
 keep_alive()
 bot.run(TOKEN)
