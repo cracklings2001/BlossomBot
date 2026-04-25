@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands, tasks
-from discord.ui import Button, View, Modal, TextInput
+from discord.ui import Button, View, Modal, TextInput, Select
 import random
 import asyncio
 import os
@@ -119,7 +119,7 @@ shop_items = {
         "type": "buff"
     },
     "protection_amulet": {
-        "name": "NOT AVAIALBLE",
+        "name": "NOT AVAILABLE",
         "emoji": "🛡️",
         "price": 300000000000000000000000000,
         "description": "NOT FOR SALE",
@@ -574,7 +574,646 @@ def get_daily_multiplier(user_id):
 # Load data on startup
 load_all_data()
 
-# --- UI VIEWS ---
+# ===================================================================
+# ADMIN UI MODALS AND VIEWS
+# ===================================================================
+
+class AdminPanelView(View):
+    """Main admin panel with all admin functions"""
+    def __init__(self):
+        super().__init__(timeout=300)
+    
+    @discord.ui.button(label="💰 Edit Balance", style=discord.ButtonStyle.primary, emoji="💰", row=0)
+    async def edit_balance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.name not in ADMINS:
+            await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
+            return
+        await interaction.response.send_modal(EditBalanceModal())
+    
+    @discord.ui.button(label="📦 Manage Items", style=discord.ButtonStyle.primary, emoji="📦", row=0)
+    async def manage_items_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.name not in ADMINS:
+            await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
+            return
+        view = ItemManagementView()
+        embed = discord.Embed(title="📦 Item Management", description="Select an action below:", color=0xff69b4)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="🐾 Manage Pets", style=discord.ButtonStyle.primary, emoji="🐾", row=0)
+    async def manage_pets_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.name not in ADMINS:
+            await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
+            return
+        view = PetManagementView()
+        embed = discord.Embed(title="🐾 Pet Management", description="Select an action below:", color=0xff69b4)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="🎟️ Generate Code", style=discord.ButtonStyle.success, emoji="🎟️", row=1)
+    async def generate_code_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.name not in ADMINS:
+            await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
+            return
+        await interaction.response.send_modal(GenerateCodeModal())
+    
+    @discord.ui.button(label="🔄 Reset Cooldowns", style=discord.ButtonStyle.warning, emoji="🔄", row=1)
+    async def reset_cooldowns_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.name not in ADMINS:
+            await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
+            return
+        view = ResetCooldownsView()
+        embed = discord.Embed(title="🔄 Reset Cooldowns", description="Select a player to reset all cooldowns:", color=0xffa500)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="🔍 Inspect Player", style=discord.ButtonStyle.secondary, emoji="🔍", row=1)
+    async def inspect_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.name not in ADMINS:
+            await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
+            return
+        view = InspectPlayerView()
+        embed = discord.Embed(title="🔍 Inspect Player", description="Select a player to inspect:", color=0xff69b4)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="🎁 Give All", style=discord.ButtonStyle.success, emoji="🎁", row=2)
+    async def give_all_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.name not in ADMINS:
+            await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
+            return
+        await interaction.response.send_modal(GiveAllModal())
+    
+    @discord.ui.button(label="⚠️ Reset Economy", style=discord.ButtonStyle.danger, emoji="⚠️", row=2)
+    async def reset_economy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.name not in ADMINS:
+            await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
+            return
+        view = ConfirmResetView()
+        embed = discord.Embed(
+            title="⚠️ DANGER ZONE",
+            description="This will reset EVERYTHING - balances, inventories, pets, cooldowns!\nAre you absolutely sure?",
+            color=0xff0000
+        )
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    @discord.ui.button(label="👑 Add Admin", style=discord.ButtonStyle.primary, emoji="👑", row=2)
+    async def add_admin_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.name not in ADMINS:
+            await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
+            return
+        await interaction.response.send_modal(AddAdminModal())
+    
+    @discord.ui.button(label="❌ Close", style=discord.ButtonStyle.danger, emoji="❌", row=3)
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Panel closed!", embed=None, view=None)
+        self.stop()
+
+
+class EditBalanceModal(Modal, title="💰 Edit Player Balance"):
+    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    amount = TextInput(label="Amount", placeholder="Positive to add, negative to subtract", required=True)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse user
+        user_input = self.user_id.value.strip()
+        member = None
+        
+        # Try to parse mention
+        if user_input.startswith('<@') and user_input.endswith('>'):
+            user_id = int(user_input.strip('<@!>'))
+            member = interaction.guild.get_member(user_id)
+        elif user_input.isdigit():
+            member = interaction.guild.get_member(int(user_input))
+        
+        if not member:
+            await interaction.response.send_message("❌ Invalid user! Please provide a valid user ID or mention.", ephemeral=True)
+            return
+        
+        # Parse amount
+        try:
+            amount = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid amount! Please enter a number.", ephemeral=True)
+            return
+        
+        old_balance = get_balance(member.id)
+        update_balance(member.id, amount)
+        new_balance = get_balance(member.id)
+        
+        action = "added" if amount > 0 else "subtracted"
+        color = 0x00ff00 if amount > 0 else 0xff6b6b
+        
+        embed = discord.Embed(
+            title="💰 Balance Updated",
+            description=f"{action.upper()} {abs(amount):,} petals to/from {member.mention}!",
+            color=color
+        )
+        embed.add_field(name="Previous Balance", value=f"{old_balance:,} petals", inline=True)
+        embed.add_field(name="New Balance", value=f"{new_balance:,} petals", inline=True)
+        
+        await interaction.response.send_message(embed=embed)
+
+
+class GiveAllModal(Modal, title="🎁 Give All Users"):
+    amount = TextInput(label="Amount", placeholder="Enter amount to give to everyone", required=True)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            amount = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid amount!", ephemeral=True)
+            return
+        
+        if amount <= 0:
+            await interaction.response.send_message("❌ Amount must be positive!", ephemeral=True)
+            return
+        
+        count = 0
+        for user_id in list(economy.keys()):
+            update_balance(user_id, amount)
+            count += 1
+        
+        await interaction.response.send_message(f"✅ Added {amount:,} petals to {count} users!")
+
+
+class GenerateCodeModal(Modal, title="🎟️ Generate Redeem Code"):
+    code = TextInput(label="Code", placeholder="Enter code (will be uppercase)", required=True)
+    value = TextInput(label="Value", placeholder="Amount of petals", required=True)
+    uses = TextInput(label="Uses", placeholder="Number of uses", required=True)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            code_upper = self.code.value.upper()
+            value = int(self.value.value)
+            uses = int(self.uses.value)
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid value or uses! Must be numbers.", ephemeral=True)
+            return
+        
+        if value <= 0 or uses <= 0:
+            await interaction.response.send_message("❌ Value and uses must be positive!", ephemeral=True)
+            return
+        
+        redeem_codes[code_upper] = {"value": value, "uses": uses}
+        save_all_data()
+        
+        embed = discord.Embed(
+            title="🎟️ Code Generated!",
+            description=f"Code: `{code_upper}`\nValue: {value:,} petals\nUses: {uses}",
+            color=0x00ff00
+        )
+        await interaction.response.send_message(embed=embed)
+
+
+class AddAdminModal(Modal, title="👑 Add Admin"):
+    username = TextInput(label="Username", placeholder="Enter Discord username (without #)", required=True)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        username = self.username.value.strip()
+        if username in ADMINS:
+            await interaction.response.send_message(f"❌ {username} is already an admin!", ephemeral=True)
+            return
+        
+        ADMINS.append(username)
+        await interaction.response.send_message(f"✅ Added {username} as admin!\nCurrent admins: {', '.join(ADMINS)}")
+
+
+class ItemManagementView(View):
+    def __init__(self):
+        super().__init__(timeout=120)
+    
+    @discord.ui.button(label="➕ Add Item", style=discord.ButtonStyle.success, emoji="➕", row=0)
+    async def add_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AddItemModal())
+    
+    @discord.ui.button(label="➖ Remove Item", style=discord.ButtonStyle.danger, emoji="➖", row=0)
+    async def remove_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RemoveItemModal())
+    
+    @discord.ui.button(label="🗑️ Clear Inventory", style=discord.ButtonStyle.warning, emoji="🗑️", row=0)
+    async def clear_inventory_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ClearInventoryModal())
+    
+    @discord.ui.button(label="◀️ Back", style=discord.ButtonStyle.secondary, emoji="◀️", row=1)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Admin Panel", embed=None, view=AdminPanelView())
+    
+    @discord.ui.button(label="❌ Close", style=discord.ButtonStyle.danger, emoji="❌", row=1)
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Closed!", embed=None, view=None)
+        self.stop()
+
+
+class AddItemModal(Modal, title="➕ Add Item to Player"):
+    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    item_name = TextInput(label="Item Name", placeholder="e.g., Flower Coin, Lucky Charm, Mystery Box", required=True)
+    quantity = TextInput(label="Quantity", placeholder="Number of items", required=True, default="1")
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse user
+        user_input = self.user_id.value.strip()
+        member = None
+        
+        if user_input.startswith('<@') and user_input.endswith('>'):
+            user_id = int(user_input.strip('<@!>'))
+            member = interaction.guild.get_member(user_id)
+        elif user_input.isdigit():
+            member = interaction.guild.get_member(int(user_input))
+        
+        if not member:
+            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            return
+        
+        # Find item
+        item_id = None
+        for key, val in shop_items.items():
+            if val['name'].lower() == self.item_name.value.lower():
+                item_id = key
+                break
+        
+        if not item_id:
+            await interaction.response.send_message(f"❌ Item '{self.item_name.value}' not found!", ephemeral=True)
+            return
+        
+        try:
+            qty = int(self.quantity.value)
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid quantity!", ephemeral=True)
+            return
+        
+        add_to_inventory(member.id, item_id, qty)
+        
+        embed = discord.Embed(
+            title="✅ Item Added",
+            description=f"Added {qty}x {shop_items[item_id]['name']} to {member.mention}!",
+            color=0x00ff00
+        )
+        await interaction.response.send_message(embed=embed)
+
+
+class RemoveItemModal(Modal, title="➖ Remove Item from Player"):
+    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    item_name = TextInput(label="Item Name", placeholder="e.g., Flower Coin, Lucky Charm, Mystery Box", required=True)
+    quantity = TextInput(label="Quantity", placeholder="Number of items to remove", required=True, default="1")
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse user
+        user_input = self.user_id.value.strip()
+        member = None
+        
+        if user_input.startswith('<@') and user_input.endswith('>'):
+            user_id = int(user_input.strip('<@!>'))
+            member = interaction.guild.get_member(user_id)
+        elif user_input.isdigit():
+            member = interaction.guild.get_member(int(user_input))
+        
+        if not member:
+            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            return
+        
+        # Find item
+        item_id = None
+        for key, val in shop_items.items():
+            if val['name'].lower() == self.item_name.value.lower():
+                item_id = key
+                break
+        
+        if not item_id:
+            await interaction.response.send_message(f"❌ Item '{self.item_name.value}' not found!", ephemeral=True)
+            return
+        
+        try:
+            qty = int(self.quantity.value)
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid quantity!", ephemeral=True)
+            return
+        
+        if not has_item(member.id, item_id, qty):
+            current_qty = get_inventory(member.id).get(item_id, 0)
+            await interaction.response.send_message(f"❌ {member.mention} only has {current_qty}x {shop_items[item_id]['name']}!", ephemeral=True)
+            return
+        
+        remove_from_inventory(member.id, item_id, qty)
+        
+        embed = discord.Embed(
+            title="🗑️ Item Removed",
+            description=f"Removed {qty}x {shop_items[item_id]['name']} from {member.mention}!",
+            color=0xff6b6b
+        )
+        await interaction.response.send_message(embed=embed)
+
+
+class ClearInventoryModal(Modal, title="🗑️ Clear Player Inventory"):
+    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse user
+        user_input = self.user_id.value.strip()
+        member = None
+        
+        if user_input.startswith('<@') and user_input.endswith('>'):
+            user_id = int(user_input.strip('<@!>'))
+            member = interaction.guild.get_member(user_id)
+        elif user_input.isdigit():
+            member = interaction.guild.get_member(int(user_input))
+        
+        if not member:
+            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            return
+        
+        if member.id in player_inventory:
+            item_count = len(player_inventory[member.id])
+            del player_inventory[member.id]
+            save_all_data()
+            
+            embed = discord.Embed(
+                title="🗑️ Inventory Cleared",
+                description=f"Removed {item_count} item(s) from {member.mention}'s inventory!",
+                color=0xff6b6b
+            )
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message(f"❌ {member.mention} has no items to clear!", ephemeral=True)
+
+
+class PetManagementView(View):
+    def __init__(self):
+        super().__init__(timeout=120)
+    
+    @discord.ui.button(label="➕ Add Pet", style=discord.ButtonStyle.success, emoji="➕", row=0)
+    async def add_pet_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AddPetModal())
+    
+    @discord.ui.button(label="➖ Remove Pet", style=discord.ButtonStyle.danger, emoji="➖", row=0)
+    async def remove_pet_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RemovePetModal())
+    
+    @discord.ui.button(label="◀️ Back", style=discord.ButtonStyle.secondary, emoji="◀️", row=1)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Admin Panel", embed=None, view=AdminPanelView())
+    
+    @discord.ui.button(label="❌ Close", style=discord.ButtonStyle.danger, emoji="❌", row=1)
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Closed!", embed=None, view=None)
+        self.stop()
+
+
+class AddPetModal(Modal, title="➕ Add Pet to Player"):
+    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    pet_name = TextInput(label="Pet Name", placeholder="e.g., Garden Cat, Phoenix, Unicorn", required=True)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse user
+        user_input = self.user_id.value.strip()
+        member = None
+        
+        if user_input.startswith('<@') and user_input.endswith('>'):
+            user_id = int(user_input.strip('<@!>'))
+            member = interaction.guild.get_member(user_id)
+        elif user_input.isdigit():
+            member = interaction.guild.get_member(int(user_input))
+        
+        if not member:
+            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            return
+        
+        # Find pet
+        pet_id = None
+        for key, val in pet_shop_items.items():
+            if val['name'].lower() == self.pet_name.value.lower():
+                pet_id = key
+                break
+        
+        if not pet_id:
+            await interaction.response.send_message(f"❌ Pet '{self.pet_name.value}' not found!", ephemeral=True)
+            return
+        
+        if member.id not in player_pets:
+            player_pets[member.id] = {}
+        
+        player_pets[member.id][pet_id] = {
+            "name": pet_shop_items[pet_id]['name'],
+            "level": 1,
+            "xp": 0,
+            "happiness": 100,
+            "last_fed": datetime.now(),
+            "last_played": datetime.now()
+        }
+        save_all_data()
+        
+        embed = discord.Embed(
+            title="✅ Pet Added",
+            description=f"Added pet {pet_shop_items[pet_id]['name']} to {member.mention}!",
+            color=0x00ff00
+        )
+        await interaction.response.send_message(embed=embed)
+
+
+class RemovePetModal(Modal, title="➖ Remove Pet from Player"):
+    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    pet_name = TextInput(label="Pet Name", placeholder="e.g., Garden Cat, Phoenix, Unicorn", required=True)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        # Parse user
+        user_input = self.user_id.value.strip()
+        member = None
+        
+        if user_input.startswith('<@') and user_input.endswith('>'):
+            user_id = int(user_input.strip('<@!>'))
+            member = interaction.guild.get_member(user_id)
+        elif user_input.isdigit():
+            member = interaction.guild.get_member(int(user_input))
+        
+        if not member:
+            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            return
+        
+        # Find pet
+        pet_id = None
+        for key, val in pet_shop_items.items():
+            if val['name'].lower() == self.pet_name.value.lower():
+                pet_id = key
+                break
+        
+        if not pet_id:
+            await interaction.response.send_message(f"❌ Pet '{self.pet_name.value}' not found!", ephemeral=True)
+            return
+        
+        if member.id in player_pets and pet_id in player_pets[member.id]:
+            del player_pets[member.id][pet_id]
+            if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
+                del pet_equipped[member.id]
+            save_all_data()
+            
+            embed = discord.Embed(
+                title="🗑️ Pet Removed",
+                description=f"Removed pet {self.pet_name.value} from {member.mention}!",
+                color=0xff6b6b
+            )
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message(f"❌ {member.mention} doesn't own that pet!", ephemeral=True)
+
+
+class ResetCooldownsView(View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(PlayerSelectMenu("cooldowns"))
+
+
+class InspectPlayerView(View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(PlayerSelectMenu("inspect"))
+
+
+class PlayerSelectMenu(Select):
+    def __init__(self, action_type):
+        self.action_type = action_type
+        options = []
+        # Get recent players from economy
+        for user_id in list(economy.keys())[:25]:
+            try:
+                # We'll fetch user info when selected
+                options.append(discord.SelectOption(
+                    label=f"User ID: {user_id}",
+                    value=str(user_id),
+                    description=f"Balance: {economy.get(user_id, 0):,} petals"
+                ))
+            except:
+                pass
+        
+        if not options:
+            options = [discord.SelectOption(label="No players found", value="none")]
+        
+        super().__init__(placeholder="Select a player...", options=options, min_values=1, max_values=1)
+    
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.send_message("❌ No players found!", ephemeral=True)
+            return
+        
+        user_id = int(self.values[0])
+        member = interaction.guild.get_member(user_id)
+        
+        if not member:
+            member = await bot.fetch_user(user_id)
+        
+        if self.action_type == "cooldowns":
+            # Reset all cooldowns
+            for cd in [beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown, 
+                       daily_cooldown, weekly_cooldown, hourly_cooldown, pet_cooldown]:
+                if user_id in cd:
+                    del cd[user_id]
+            save_all_data()
+            
+            embed = discord.Embed(
+                title="🔄 Cooldowns Reset",
+                description=f"Reset all cooldowns for {member.mention}!",
+                color=0x00ff00
+            )
+            await interaction.response.send_message(embed=embed)
+        
+        elif self.action_type == "inspect":
+            # Show player data
+            embed = discord.Embed(
+                title=f"🔍 Player Data: {member.name}",
+                color=0xff69b4
+            )
+            
+            # Balance
+            balance = get_balance(member.id)
+            embed.add_field(name="💰 Balance", value=f"{balance:,} petals", inline=False)
+            
+            # Inventory
+            inv = get_inventory(member.id)
+            if inv:
+                inv_text = ""
+                for item_id, qty in inv.items():
+                    if item_id in shop_items:
+                        inv_text += f"{shop_items[item_id]['name']}: x{qty}\n"
+                if inv_text:
+                    embed.add_field(name="🎒 Inventory", value=inv_text[:1024], inline=False)
+                else:
+                    embed.add_field(name="🎒 Inventory", value="Empty", inline=False)
+            else:
+                embed.add_field(name="🎒 Inventory", value="Empty", inline=False)
+            
+            # Pets
+            if member.id in player_pets and player_pets[member.id]:
+                pet_text = ""
+                for pet_id, pet in player_pets[member.id].items():
+                    pet_data = pet_shop_items[pet_id]
+                    pet_text += f"{pet_data['emoji']} {pet.get('name', pet_data['name'])} - Lvl {pet['level']}\n"
+                embed.add_field(name="🐾 Pets", value=pet_text[:1024], inline=False)
+            else:
+                embed.add_field(name="🐾 Pets", value="No pets", inline=False)
+            
+            # Active Buffs
+            buff_text = ""
+            if member.id in player_buffs:
+                buffs = player_buffs[member.id]
+                if buffs.get('luck'):
+                    buff_text += "🍀 Lucky Charm\n"
+                if buffs.get('xp_boost'):
+                    buff_text += "⚡ XP Boost\n"
+                if buffs.get('protection', 0) > 0:
+                    buff_text += f"🛡️ Protection: {buffs['protection']}x\n"
+                if buffs.get('double_win', 0) > 0:
+                    buff_text += f"🎰 Double Win: {buffs['double_win']}x\n"
+            
+            if not buff_text:
+                buff_text = "No active buffs"
+            embed.add_field(name="✨ Active Buffs", value=buff_text, inline=False)
+            
+            await interaction.response.send_message(embed=embed)
+
+
+class ConfirmResetView(View):
+    def __init__(self):
+        super().__init__(timeout=60)
+    
+    @discord.ui.button(label="⚠️ YES, RESET EVERYTHING", style=discord.ButtonStyle.danger, emoji="⚠️")
+    async def confirm_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global economy, player_inventory, player_pets, pet_equipped, player_buffs, player_permanents
+        global beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown
+        global daily_cooldown, weekly_cooldown, hourly_cooldown, gift_cooldown
+        global pet_feed_cooldown, pet_play_cooldown, pet_cooldown
+        
+        economy = {}
+        player_inventory = {}
+        player_pets = {}
+        pet_equipped = {}
+        player_buffs = {}
+        player_permanents = {}
+        beg_cooldown = {}
+        farm_cooldown = {}
+        hunt_cooldown = {}
+        work_cooldown = {}
+        daily_cooldown = {}
+        weekly_cooldown = {}
+        hourly_cooldown = {}
+        gift_cooldown = {}
+        pet_feed_cooldown = {}
+        pet_play_cooldown = {}
+        pet_cooldown = {}
+        
+        save_all_data()
+        
+        embed = discord.Embed(
+            title="⚠️ Economy Reset!",
+            description="The entire economy has been wiped clean!",
+            color=0xff0000
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+    
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Reset cancelled!", embed=None, view=None)
+        self.stop()
+
+
+# ===================================================================
+# REGULAR UI VIEWS (Redeem, Shop, etc.)
+# ===================================================================
 
 class RedeemModal(Modal, title="🌸 Redeem Petals"):
     code_input = TextInput(label="Voucher Code", placeholder="Enter your code...", min_length=1, max_length=20)
@@ -596,6 +1235,7 @@ class RedeemModal(Modal, title="🌸 Redeem Petals"):
         else:
             await interaction.response.send_message("❌ Invalid code!", ephemeral=True)
 
+
 class RedeemButtonView(View):
     def __init__(self):
         super().__init__(timeout=60)
@@ -604,7 +1244,7 @@ class RedeemButtonView(View):
     async def redeem_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RedeemModal())
 
-# Shop Views
+
 class ShopView(View):
     def __init__(self, ctx, page=0):
         super().__init__(timeout=120)
@@ -707,6 +1347,7 @@ class ShopView(View):
         embed.set_footer(text=f"Your Balance: {balance:,} petals | Page {self.page + 1}/{self.total_pages}")
         return embed
 
+
 class ConfirmView(View):
     def __init__(self, ctx, item_id, item_data, price):
         super().__init__(timeout=30)
@@ -747,7 +1388,7 @@ class ConfirmView(View):
         await interaction.response.edit_message(content="Purchase cancelled!", embed=None, view=None)
         self.stop()
 
-# Pet Shop Views
+
 class PetShopView(View):
     def __init__(self, ctx, page=0):
         super().__init__(timeout=120)
@@ -854,6 +1495,7 @@ class PetShopView(View):
         embed.set_footer(text=f"Your Balance: {balance:,} petals | Page {self.page + 1}/{self.total_pages}")
         return embed
 
+
 class ConfirmPetView(View):
     def __init__(self, ctx, pet_id, pet_data, price):
         super().__init__(timeout=30)
@@ -904,7 +1546,7 @@ class ConfirmPetView(View):
         await interaction.response.edit_message(content="Adoption cancelled!", embed=None, view=None)
         self.stop()
 
-# --- INVENTORY WITH BUTTONS ---
+
 class InventoryView(View):
     def __init__(self, ctx, target, page=0):
         super().__init__(timeout=120)
@@ -1086,6 +1728,7 @@ class InventoryView(View):
         embed.set_footer(text=f"💰 Total Inventory Value: {total_value:,} petals")
         return embed
 
+
 class ConfirmUseView(View):
     def __init__(self, ctx, parent_view, item_id, item_data):
         super().__init__(timeout=30)
@@ -1207,7 +1850,10 @@ class ConfirmUseView(View):
         await interaction.response.edit_message(content="❌ Item use cancelled!", embed=None, view=None)
         self.stop()
 
-# --- GAME VIEWS ---
+
+# ===================================================================
+# GAME VIEWS
+# ===================================================================
 
 class CrashView(View):
     def __init__(self, ctx, bet):
@@ -1268,6 +1914,7 @@ class CrashView(View):
             embed = discord.Embed(title="✈️ Crash Game", description=f"Multiplier: {self.multiplier:.2f}x\nCurrent Payout: {int(self.bet * self.multiplier)} petals", color=0xffa500)
             await self.message.edit(embed=embed, view=self)
 
+
 class CoinflipView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30)
@@ -1310,6 +1957,7 @@ class CoinflipView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
+
 class DiceDuelView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30)
@@ -1347,6 +1995,7 @@ class DiceDuelView(View):
         embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
+
 
 class SlotMachineView(View):
     def __init__(self, ctx, bet):
@@ -1387,6 +2036,7 @@ class SlotMachineView(View):
         embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
+
 
 class RouletteView(View):
     def __init__(self, ctx, bet):
@@ -1444,7 +2094,7 @@ class RouletteView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- MINES GAME ---
+
 class MinesButton(Button):
     def __init__(self, num):
         super().__init__(label="🌸", style=discord.ButtonStyle.secondary, row=(num-1)//3, emoji="🌸")
@@ -1506,6 +2156,7 @@ class MinesButton(Button):
             embed = discord.Embed(title="🌸 Minesweeper", description=f"Safe tiles: {view.revealed}\nMultiplier: {mult}x\nPotential win: {val} petals", color=0x00ff88)
             await interaction.response.edit_message(embed=embed, view=view)
 
+
 class MinesView(View):
     def __init__(self, ctx, bet, bombs):
         super().__init__(timeout=60)
@@ -1516,7 +2167,7 @@ class MinesView(View):
         for i in range(1, 10):
             self.add_item(MinesButton(i))
 
-# --- COLOR GAME ---
+
 class ColorButton(Button):
     def __init__(self, name, emoji, style_color):
         super().__init__(label=name, emoji=emoji, style=style_color)
@@ -1559,6 +2210,7 @@ class ColorButton(Button):
         embed.add_field(name="New Balance", value=f"{get_balance(view.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=view)
 
+
 class ColorView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30)
@@ -1577,7 +2229,7 @@ class ColorView(View):
         for name, emoji, style in color_configs:
             self.add_item(ColorButton(name, emoji, style))
 
-# --- HIGHER LOWER GAME ---
+
 class HigherLowerView(View):
     def __init__(self, ctx, bet, current_card, card_display, card_emoji):
         super().__init__(timeout=30)
@@ -1643,7 +2295,7 @@ class HigherLowerView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- TOWER CLIMB GAME ---
+
 class TowerView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=60)
@@ -1698,7 +2350,7 @@ class TowerView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- SCRATCH CARD GAME ---
+
 class ScratchView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30)
@@ -1764,7 +2416,7 @@ class ScratchView(View):
             remaining = 3 - sum(self.revealed)
             await interaction.response.edit_message(content=f"Scratched {self.values[index]}! {remaining} left!", view=self)
 
-# --- TREASURE HUNT GAME ---
+
 class TreasureHuntView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30)
@@ -1835,7 +2487,7 @@ class TreasureHuntView(View):
             remaining = self.max_attempts - self.attempts
             await interaction.response.edit_message(content=f"Nothing at spot {spot}! {remaining} attempt(s) left!", view=self)
 
-# --- RUSSIAN ROULETTE (3 Bullets) ---
+
 class RussianRouletteView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30)
@@ -1913,7 +2565,7 @@ class RussianRouletteView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- HORSE RACING GAME ---
+
 class RaceView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30)
@@ -1969,7 +2621,7 @@ class RaceView(View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
-# --- POKER GAME ---
+
 class PokerView(View):
     def __init__(self, ctx, bet):
         super().__init__(timeout=30)
@@ -2032,7 +2684,7 @@ class PokerView(View):
             return 1
         return 0
 
-# --- DUEL VIEW ---
+
 class DuelView(View):
     def __init__(self, ctx, opponent, bet):
         super().__init__(timeout=60)
@@ -2073,7 +2725,10 @@ class DuelView(View):
         await interaction.response.edit_message(content="❌ Duel declined!", embed=None, view=None)
         self.stop()
 
-# --- COMMANDS ---
+
+# ===================================================================
+# COMMANDS
+# ===================================================================
 
 @bot.command()
 async def help(ctx):
@@ -2085,8 +2740,27 @@ async def help(ctx):
     embed.add_field(name="⚔️ **Duel**", value="`duel @user <bet>`", inline=False)
     embed.add_field(name="🎁 **Gifting**", value="`gift @user <amount>`, `giftstats`", inline=False)
     embed.add_field(name="🎟️ **Redeem**", value="`redeem`", inline=False)
+    embed.add_field(name="👑 **Admin**", value="`admin` - Open admin control panel", inline=False)
     embed.set_footer(text="🌸 Type b!inventory to see and use your items with buttons!")
     await ctx.send(embed=embed)
+
+
+@bot.command()
+async def admin(ctx):
+    """Open the admin control panel"""
+    if ctx.author.name not in ADMINS:
+        await ctx.send("❌ You don't have permission to use this command!")
+        return
+    
+    embed = discord.Embed(
+        title="👑 Admin Control Panel",
+        description="Welcome to the admin dashboard! Click any button below to manage the bot.",
+        color=0xff69b4
+    )
+    embed.add_field(name="Available Actions", value="• Edit player balances\n• Manage items (add/remove)\n• Manage pets\n• Generate redeem codes\n• Reset cooldowns\n• Inspect players\n• Give all users petals\n• Reset economy\n• Add new admins", inline=False)
+    
+    await ctx.send(embed=embed, view=AdminPanelView())
+
 
 @bot.command()
 async def bal(ctx):
@@ -2094,6 +2768,7 @@ async def bal(ctx):
     emoji = "👑" if balance >= 10000 else "💎" if balance >= 5000 else "🌟" if balance >= 1000 else "🌸"
     embed = discord.Embed(title=f"{emoji} {ctx.author.name}'s Balance", description=f"**{balance:,} petals**", color=0xff69b4)
     await ctx.send(embed=embed)
+
 
 @bot.command()
 async def lb(ctx):
@@ -2104,10 +2779,14 @@ async def lb(ctx):
     desc = ""
     for i, (uid, bal) in enumerate(top, 1):
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
-        user = await bot.fetch_user(uid)
-        desc += f"{medal} **{i}.** {user.name} — `{bal:,}` petals\n"
+        try:
+            user = await bot.fetch_user(uid)
+            desc += f"{medal} **{i}.** {user.name} — `{bal:,}` petals\n"
+        except:
+            desc += f"{medal} **{i}.** Unknown User — `{bal:,}` petals\n"
     embed = discord.Embed(title="🏆 Leaderboard", description=desc, color=0xffb7c5)
     await ctx.send(embed=embed)
+
 
 @bot.command()
 async def daily(ctx):
@@ -2121,6 +2800,7 @@ async def daily(ctx):
     set_cooldown(daily_cooldown, uid)
     await ctx.send(f"📅 You received {reward} petals!")
 
+
 @bot.command()
 async def weekly(ctx):
     uid = ctx.author.id
@@ -2132,6 +2812,7 @@ async def weekly(ctx):
     update_balance(uid, reward)
     set_cooldown(weekly_cooldown, uid)
     await ctx.send(f"📅 Weekly reward: {reward} petals!")
+
 
 @bot.command()
 async def hourly(ctx):
@@ -2145,6 +2826,7 @@ async def hourly(ctx):
     set_cooldown(hourly_cooldown, uid)
     await ctx.send(f"⏰ Hourly reward: {reward} petals!")
 
+
 @bot.command()
 async def beg(ctx):
     uid = ctx.author.id
@@ -2156,6 +2838,7 @@ async def beg(ctx):
     update_balance(uid, reward)
     set_cooldown(beg_cooldown, uid)
     await ctx.send(f"🌸 A kind stranger gave you {reward} petals!")
+
 
 @bot.command()
 async def farm(ctx):
@@ -2169,6 +2852,7 @@ async def farm(ctx):
     set_cooldown(farm_cooldown, uid)
     await ctx.send(f"🚜 You harvested {reward} petals!")
 
+
 @bot.command()
 async def hunt(ctx):
     uid = ctx.author.id
@@ -2180,6 +2864,7 @@ async def hunt(ctx):
     update_balance(uid, reward)
     set_cooldown(hunt_cooldown, uid)
     await ctx.send(f"🏹 You found {reward} petals while hunting!")
+
 
 @bot.command()
 async def work(ctx):
@@ -2193,6 +2878,7 @@ async def work(ctx):
     set_cooldown(work_cooldown, uid)
     await ctx.send(f"💼 You earned {reward} petals from work!")
 
+
 # Game Commands
 @bot.command()
 async def crash(ctx, bet: int):
@@ -2204,6 +2890,7 @@ async def crash(ctx, bet: int):
     view = CrashView(ctx, bet)
     await view.start(msg)
 
+
 @bot.command()
 async def coinflip(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
@@ -2211,6 +2898,7 @@ async def coinflip(ctx, bet: int):
         return
     embed = discord.Embed(title="🪙 Coinflip", description=f"Bet: {bet} petals\nChoose Heads or Tails", color=0xffa500)
     await ctx.send(embed=embed, view=CoinflipView(ctx, bet))
+
 
 @bot.command()
 async def dice(ctx, bet: int):
@@ -2220,6 +2908,7 @@ async def dice(ctx, bet: int):
     embed = discord.Embed(title="🎲 Dice Duel", description=f"Bet: {bet} petals\nClick ROLL to play!", color=0xffa500)
     await ctx.send(embed=embed, view=DiceDuelView(ctx, bet))
 
+
 @bot.command()
 async def slots(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
@@ -2228,6 +2917,7 @@ async def slots(ctx, bet: int):
     embed = discord.Embed(title="🎰 Slot Machine", description=f"Bet: {bet} petals\nClick SPIN to play!", color=0xffa500)
     await ctx.send(embed=embed, view=SlotMachineView(ctx, bet))
 
+
 @bot.command()
 async def roulette(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
@@ -2235,6 +2925,7 @@ async def roulette(ctx, bet: int):
         return
     embed = discord.Embed(title="🎡 Roulette", description=f"Bet: {bet} petals\nChoose Red, Black, or Green", color=0xffa500)
     await ctx.send(embed=embed, view=RouletteView(ctx, bet))
+
 
 @bot.command()
 async def mines(ctx, bet: int):
@@ -2245,6 +2936,7 @@ async def mines(ctx, bet: int):
     embed = discord.Embed(title="💣 Minesweeper", description=f"Bet: {bet} petals\nFind safe flowers! (4 bombs hidden)", color=0xff69b4)
     await ctx.send(embed=embed, view=MinesView(ctx, bet, bombs))
 
+
 @bot.command()
 async def color(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
@@ -2252,6 +2944,7 @@ async def color(ctx, bet: int):
         return
     embed = discord.Embed(title="🎨 Color Predictor", description=f"Bet: {bet} petals\nPick a color!", color=0xff69b4)
     await ctx.send(embed=embed, view=ColorView(ctx, bet))
+
 
 @bot.command()
 async def higherlower(ctx, bet: int):
@@ -2273,6 +2966,7 @@ async def higherlower(ctx, bet: int):
     embed = discord.Embed(title="🎴 Higher or Lower", description=f"Your card: {current_emoji} {current_display}\nBet: {bet} petals\n\nWill the next card be HIGHER or LOWER?", color=0xffa500)
     await ctx.send(embed=embed, view=HigherLowerView(ctx, bet, current_card, current_display, current_emoji))
 
+
 @bot.command()
 async def tower(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
@@ -2280,6 +2974,7 @@ async def tower(ctx, bet: int):
         return
     embed = discord.Embed(title="🏰 Tower Climb", description=f"Bet: {bet} petals\nClimb the tower and cash out!", color=0xffa500)
     await ctx.send(embed=embed, view=TowerView(ctx, bet))
+
 
 @bot.command()
 async def scratch(ctx, bet: int):
@@ -2289,6 +2984,7 @@ async def scratch(ctx, bet: int):
     embed = discord.Embed(title="🎫 Scratch Card", description=f"Bet: {bet} petals\nScratch all three cards!", color=0xffa500)
     await ctx.send(embed=embed, view=ScratchView(ctx, bet))
 
+
 @bot.command()
 async def treasure(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
@@ -2296,6 +2992,7 @@ async def treasure(ctx, bet: int):
         return
     embed = discord.Embed(title="💎 Treasure Hunt", description=f"Bet: {bet} petals\nFind the treasure in 2 attempts!", color=0xffa500)
     await ctx.send(embed=embed, view=TreasureHuntView(ctx, bet))
+
 
 @bot.command()
 async def roulettegun(ctx, bet: int):
@@ -2305,6 +3002,7 @@ async def roulettegun(ctx, bet: int):
     embed = discord.Embed(title="💀 Russian Roulette", description=f"Bet: {bet} petals\n⚠️ 3 BULLETS, 6 CHAMBERS!\nPull the trigger up to 3 times or cash out early!", color=0xff0000)
     await ctx.send(embed=embed, view=RussianRouletteView(ctx, bet))
 
+
 @bot.command()
 async def race(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
@@ -2313,6 +3011,7 @@ async def race(ctx, bet: int):
     embed = discord.Embed(title="🏇 Horse Racing", description=f"Bet: {bet} petals\nPick a horse to win!", color=0xffa500)
     await ctx.send(embed=embed, view=RaceView(ctx, bet))
 
+
 @bot.command()
 async def poker(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
@@ -2320,6 +3019,7 @@ async def poker(ctx, bet: int):
         return
     embed = discord.Embed(title="🃏 Poker", description=f"Bet: {bet} petals\nFace off against the bot!", color=0xffa500)
     await ctx.send(embed=embed, view=PokerView(ctx, bet))
+
 
 @bot.command()
 async def blackjack(ctx, bet: int):
@@ -2379,6 +3079,7 @@ async def blackjack(ctx, bet: int):
     final_embed.add_field(name="New Balance", value=f"{get_balance(ctx.author.id):,} petals", inline=False)
     await ctx.send(embed=final_embed)
 
+
 @bot.command()
 async def rps(ctx, choice: str, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
@@ -2425,6 +3126,7 @@ async def rps(ctx, choice: str, bet: int):
     embed.add_field(name="New Balance", value=f"{get_balance(ctx.author.id):,} petals", inline=False)
     await ctx.send(embed=embed)
 
+
 # Shop Commands
 @bot.command()
 async def shop(ctx, page: int = 1):
@@ -2432,11 +3134,13 @@ async def shop(ctx, page: int = 1):
     embed = view.create_embed()
     await ctx.send(embed=embed, view=view)
 
+
 @bot.command()
 async def petshop(ctx, page: int = 1):
     view = PetShopView(ctx, page - 1)
     embed = view.create_embed()
     await ctx.send(embed=embed, view=view)
+
 
 @bot.command()
 async def inventory(ctx, member: discord.Member = None):
@@ -2456,6 +3160,7 @@ async def inventory(ctx, member: discord.Member = None):
     view = InventoryView(ctx, target)
     embed = view.create_inventory_embed()
     await ctx.send(embed=embed, view=view)
+
 
 @bot.command()
 async def buffs(ctx):
@@ -2495,6 +3200,7 @@ async def buffs(ctx):
         embed.description = "No active buffs! Buy items from the shop and use `b!inventory` to activate them!"
     
     await ctx.send(embed=embed)
+
 
 # Gift Commands
 @bot.command()
@@ -2541,6 +3247,7 @@ async def gift(ctx, member: discord.Member, amount: int):
     embed.add_field(name="Daily Limit", value=f"Used: {new_total:,}/{limit:,}")
     await ctx.send(embed=embed)
 
+
 @bot.command()
 async def giftstats(ctx):
     uid = ctx.author.id
@@ -2553,6 +3260,7 @@ async def giftstats(ctx):
         await ctx.send(f"📊 Daily Gifting: Used {used:,}/{limit:,} petals\nRemaining: {remaining:,}")
     else:
         await ctx.send(f"📊 Daily Gifting: Used 0/{limit:,} petals\nRemaining: {limit:,}")
+
 
 # Pet Commands
 @bot.command()
@@ -2571,6 +3279,7 @@ async def mypets(ctx):
                       value=f"Level: {pet['level']}/{pet_data['max_level']}\nHappiness: {happiness} {pet['happiness']}%\nXP: {pet['xp']}/{pet_data['xp_per_level'] * pet['level']}", inline=False)
     embed.set_footer(text="Use b!pet to interact with your pets")
     await ctx.send(embed=embed)
+
 
 @bot.command()
 async def pet(ctx, action: str = None, *, name: str = None):
@@ -2718,6 +3427,7 @@ async def pet(ctx, action: str = None, *, name: str = None):
     else:
         await ctx.send("❌ Invalid action! Use: `feed`, `play`, `collect`, `rename`, or `equip`")
 
+
 @bot.command()
 async def petstats(ctx, member: discord.Member = None):
     target = member or ctx.author
@@ -2743,6 +3453,7 @@ async def petstats(ctx, member: discord.Member = None):
     embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{xp_needed:,}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals", inline=False)
     await ctx.send(embed=embed)
 
+
 # Duel Command
 @bot.command()
 async def duel(ctx, opponent: discord.Member, bet: int):
@@ -2759,107 +3470,13 @@ async def duel(ctx, opponent: discord.Member, bet: int):
     embed = discord.Embed(title="⚔️ Duel Challenge!", description=f"{ctx.author.mention} challenges {opponent.mention} to a duel for {bet} petals!\n\n{opponent.mention}, do you accept?", color=0xffa500)
     await ctx.send(embed=embed, view=DuelView(ctx, opponent, bet))
 
+
 # Redeem Command
 @bot.command()
 async def redeem(ctx):
     embed = discord.Embed(title="🎟️ Redeem Code", description="Click the button below to redeem a voucher code!", color=0xff69b4)
     await ctx.send(embed=embed, view=RedeemButtonView())
 
-# Admin Commands
-@bot.command()
-async def gen(ctx, code: str, value: int, uses: int):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    redeem_codes[code.upper()] = {"value": value, "uses": uses}
-    save_all_data()
-    await ctx.send(f"✅ Generated code `{code.upper()}` worth {value} petals ({uses} uses)")
-
-@bot.command()
-async def give(ctx, member: discord.Member, amount: int):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    update_balance(member.id, amount)
-    await ctx.send(f"✅ Gave {amount} petals to {member.mention}")
-
-@bot.command()
-async def reset_cooldowns(ctx, member: discord.Member = None):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    target = member or ctx.author
-    for cd in [beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown, daily_cooldown, weekly_cooldown, hourly_cooldown, pet_cooldown]:
-        if target.id in cd:
-            del cd[target.id]
-    save_all_data()
-    await ctx.send(f"✅ Reset all cooldowns for {target.mention}")
-
-@bot.command()
-async def add_item(ctx, member: discord.Member, item: str, qty: int = 1):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    item_id = None
-    for key, val in shop_items.items():
-        if val['name'].lower() == item.lower():
-            item_id = key
-            break
-    if not item_id:
-        await ctx.send(f"❌ Item '{item}' not found!")
-        return
-    add_to_inventory(member.id, item_id, qty)
-    await ctx.send(f"✅ Added {qty}x {shop_items[item_id]['name']} to {member.mention}")
-
-@bot.command()
-async def add_pet(ctx, member: discord.Member, pet_name: str):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    pet_id = None
-    for key, val in pet_shop_items.items():
-        if val['name'].lower() == pet_name.lower():
-            pet_id = key
-            break
-    if not pet_id:
-        await ctx.send(f"❌ Pet '{pet_name}' not found!")
-        return
-    
-    if member.id not in player_pets:
-        player_pets[member.id] = {}
-    player_pets[member.id][pet_id] = {
-        "name": pet_shop_items[pet_id]['name'],
-        "level": 1,
-        "xp": 0,
-        "happiness": 100,
-        "last_fed": datetime.now(),
-        "last_played": datetime.now()
-    }
-    save_all_data()
-    await ctx.send(f"✅ Added pet {pet_shop_items[pet_id]['name']} to {member.mention}")
-
-@bot.command()
-async def remove_pet(ctx, member: discord.Member, pet_name: str):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    pet_id = None
-    for key, val in pet_shop_items.items():
-        if val['name'].lower() == pet_name.lower():
-            pet_id = key
-            break
-    if not pet_id:
-        await ctx.send(f"❌ Pet '{pet_name}' not found!")
-        return
-    
-    if member.id in player_pets and pet_id in player_pets[member.id]:
-        del player_pets[member.id][pet_id]
-        if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
-            del pet_equipped[member.id]
-        save_all_data()
-        await ctx.send(f"✅ Removed pet {pet_name} from {member.mention}")
-    else:
-        await ctx.send(f"❌ {member.mention} doesn't own that pet!")
 
 @bot.command()
 async def setup(ctx):
@@ -2870,16 +3487,21 @@ async def setup(ctx):
     save_all_data()
     await ctx.send(f"✅ Leaderboard channel set to {ctx.channel.mention}")
 
+
 @bot.command()
 @commands.is_owner()
 async def add_admin(ctx, username: str):
     if username not in ADMINS:
         ADMINS.append(username)
         await ctx.send(f"✅ Added {username} as admin!")
+    else:
+        await ctx.send(f"❌ {username} is already an admin!")
+
 
 @bot.command()
 async def admins(ctx):
     await ctx.send(f"👑 Admins: {', '.join(ADMINS)}")
+
 
 # Auto-save and leaderboard tasks
 async def auto_save():
@@ -2887,6 +3509,7 @@ async def auto_save():
         await asyncio.sleep(60)
         save_all_data()
         print("💾 Auto-saved all data!")
+
 
 @tasks.loop(hours=1)
 async def hourly_leaderboard():
@@ -2898,10 +3521,14 @@ async def hourly_leaderboard():
                 desc = ""
                 for i, (uid, bal) in enumerate(top, 1):
                     medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
-                    user = await bot.fetch_user(uid)
-                    desc += f"{medal} **{i}.** {user.name} — `{bal:,}` petals\n"
+                    try:
+                        user = await bot.fetch_user(uid)
+                        desc += f"{medal} **{i}.** {user.name} — `{bal:,}` petals\n"
+                    except:
+                        desc += f"{medal} **{i}.** Unknown User — `{bal:,}` petals\n"
                 embed = discord.Embed(title="🏆 Hourly Leaderboard", description=desc, color=0xffb7c5)
                 await channel.send(embed=embed)
+
 
 @bot.event
 async def on_ready():
@@ -2912,6 +3539,7 @@ async def on_ready():
     bot.loop.create_task(auto_save())
     if not hourly_leaderboard.is_running():
         hourly_leaderboard.start()
+
 
 # Run the bot
 keep_alive()
