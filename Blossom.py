@@ -121,7 +121,7 @@ shop_items = {
     "protection_amulet": {
         "name": "🛡️ Protection Amulet",
         "emoji": "🛡️",
-        "price": 30000,
+        "price": 300000000000,
         "description": "Protects you from one loss in any game",
         "type": "consumable"
     },
