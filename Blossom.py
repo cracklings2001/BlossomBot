@@ -615,7 +615,7 @@ class AdminPanelView(View):
             return
         await interaction.response.send_modal(GenerateCodeModal())
     
-    @discord.ui.button(label="🔄 Reset Cooldowns", style=discord.ButtonStyle.warning, emoji="🔄", row=1)
+    @discord.ui.button(label="🔄 Reset Cooldowns", style=discord.ButtonStyle.danger, emoji="🔄", row=1)
     async def reset_cooldowns_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.name not in ADMINS:
             await interaction.response.send_message("❌ You don't have permission to use this!", ephemeral=True)
