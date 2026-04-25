@@ -119,10 +119,10 @@ shop_items = {
         "type": "buff"
     },
     "protection_amulet": {
-        "name": "🛡️ Protection Amulet",
+        "name": "NOT AVAIALBLE",
         "emoji": "🛡️",
-        "price": 3000000000000000,
-        "description": "Protects you from one loss in any game",
+        "price": 300000000000000000000000000,
+        "description": "NOT FOR SALE",
         "type": "consumable"
     },
     "double_win": {
