@@ -121,7 +121,7 @@ shop_items = {
     "protection_amulet": {
         "name": "N/A",
         "emoji": "N/A",
-        "price": N/A,
+        "price": 999999999999999999999999999999,
         "description": "N/A",
         "type": "N/A"
     },
