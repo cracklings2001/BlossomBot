@@ -542,6 +542,48 @@ def format_time(seconds):
     else:
         return f"{secs}s"
 
+# --- BUFF HANDLING FUNCTIONS ---
+def apply_win_buffs(user_id, win_amount):
+    """Apply double win token buff and return the modified win amount"""
+    if user_id in player_buffs and player_buffs[user_id].get('double_win', 0) > 0:
+        win_amount = win_amount * 2
+        player_buffs[user_id]['double_win'] -= 1
+        if player_buffs[user_id]['double_win'] <= 0:
+            del player_buffs[user_id]['double_win']
+        save_all_data()
+        return win_amount, True
+    return win_amount, False
+
+def apply_loss_protection(user_id, loss_amount):
+    """Apply protection amulet buff and return whether the loss is prevented"""
+    if user_id in player_buffs and player_buffs[user_id].get('protection', 0) > 0:
+        player_buffs[user_id]['protection'] -= 1
+        if player_buffs[user_id]['protection'] <= 0:
+            del player_buffs[user_id]['protection']
+        save_all_data()
+        return 0, True
+    return loss_amount, False
+
+def apply_luck_buff(user_id):
+    """Check if user has lucky charm active"""
+    if user_id in player_buffs and player_buffs[user_id].get('luck'):
+        expiry = player_buffs[user_id].get('luck_expiry')
+        if expiry and expiry > datetime.now():
+            return True
+        else:
+            player_buffs[user_id]['luck'] = False
+    return False
+
+def get_daily_multiplier(user_id):
+    """Get daily reward multiplier from XP boost"""
+    if user_id in player_buffs and player_buffs[user_id].get('xp_boost'):
+        expiry = player_buffs[user_id].get('xp_boost_expiry')
+        if expiry and expiry > datetime.now():
+            return 2
+        else:
+            player_buffs[user_id]['xp_boost'] = False
+    return 1
+
 # Load data on startup
 load_all_data()
 
@@ -1179,7 +1221,7 @@ class ConfirmUseView(View):
         await interaction.response.edit_message(content="❌ Item use cancelled!", embed=None, view=None)
         self.stop()
 
-# --- GAME VIEWS ---
+# --- GAME VIEWS WITH BUFF SUPPORT ---
 
 class CrashView(View):
     def __init__(self, ctx, bet):
@@ -1201,10 +1243,15 @@ class CrashView(View):
             return
         
         self.cashed_out = True
-        win = int(self.bet * self.multiplier)
-        update_balance(self.ctx.author.id, win - self.bet)
+        win_amount = int(self.bet * self.multiplier)
+        final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+        update_balance(self.ctx.author.id, final_win - self.bet)
         
-        embed = discord.Embed(title="✈️ Cash Out!", description=f"You cashed out at {self.multiplier:.2f}x and won {win} petals!", color=0x00ff00)
+        embed = discord.Embed(title="✈️ Cash Out!", description=f"You cashed out at {self.multiplier:.2f}x!", color=0x00ff00)
+        if buff_used:
+            embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+        embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
     
@@ -1219,8 +1266,15 @@ class CrashView(View):
             
             if random.random() < 0.1 or self.multiplier >= self.crash_point:
                 self.crashed = True
-                update_balance(self.ctx.author.id, -self.bet)
-                embed = discord.Embed(title="💥 CRASH!", description=f"The plane crashed at {self.multiplier:.2f}x! You lost {self.bet} petals!", color=0xff0000)
+                loss_amount = self.bet
+                actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+                update_balance(self.ctx.author.id, -actual_loss)
+                embed = discord.Embed(title="💥 CRASH!", description=f"The plane crashed at {self.multiplier:.2f}x!", color=0xff0000)
+                if buff_used:
+                    embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+                else:
+                    embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+                embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
                 await self.message.edit(embed=embed, view=None)
                 self.stop()
                 break
@@ -1249,13 +1303,24 @@ class CoinflipView(View):
         
         result = random.choice(["heads", "tails"])
         if choice == result:
-            win = int(self.bet * 0.9)
-            update_balance(self.ctx.author.id, win)
-            embed = discord.Embed(title="🪙 Coinflip", description=f"You chose {choice.upper()}, result was {result.upper()}! You won {win} petals!", color=0x00ff00)
+            win_amount = int(self.bet * 0.9)
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            update_balance(self.ctx.author.id, final_win)
+            embed = discord.Embed(title="🪙 Coinflip", description=f"You chose {choice.upper()}, result was {result.upper()}!", color=0x00ff00)
+            if buff_used:
+                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(title="🪙 Coinflip", description=f"You chose {choice.upper()}, result was {result.upper()}! You lost {self.bet} petals!", color=0xff0000)
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            embed = discord.Embed(title="🪙 Coinflip", description=f"You chose {choice.upper()}, result was {result.upper()}!", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
         
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
@@ -1276,13 +1341,24 @@ class DiceDuelView(View):
         dice = {1:"⚀",2:"⚁",3:"⚂",4:"⚃",5:"⚄",6:"⚅"}
         
         if player > bot:
-            win = int(self.bet * 1.8)
-            update_balance(self.ctx.author.id, win - self.bet)
-            embed = discord.Embed(title="🎲 Dice Duel", description=f"Your roll: {dice[player]} {player}\nBot roll: {dice[bot]} {bot}\n\nYou win {win} petals!", color=0x00ff00)
+            win_amount = int(self.bet * 1.8)
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            update_balance(self.ctx.author.id, final_win - self.bet)
+            embed = discord.Embed(title="🎲 Dice Duel", description=f"Your roll: {dice[player]} {player}\nBot roll: {dice[bot]} {bot}", color=0x00ff00)
+            if buff_used:
+                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(title="🎲 Dice Duel", description=f"Your roll: {dice[player]} {player}\nBot roll: {dice[bot]} {bot}\n\nYou lose {self.bet} petals!", color=0xff0000)
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            embed = discord.Embed(title="🎲 Dice Duel", description=f"Your roll: {dice[player]} {player}\nBot roll: {dice[bot]} {bot}", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
         
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
@@ -1303,21 +1379,26 @@ class SlotMachineView(View):
         
         if reels[0] == reels[1] == reels[2]:
             mult = {"7️⃣":6, "💎":5, "⭐":4, "🌸":3}.get(reels[0], 2)
-            win = self.bet * mult
-            update_balance(self.ctx.author.id, win - self.bet)
-            result = f"JACKPOT! Won {win} petals!"
+            win_amount = self.bet * mult
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            update_balance(self.ctx.author.id, final_win - self.bet)
+            result = f"JACKPOT! Won {final_win} petals!"
             color = 0x00ff00
         elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
-            win = int(self.bet * 1.5)
-            update_balance(self.ctx.author.id, win - self.bet)
-            result = f"MATCH! Won {win} petals!"
+            win_amount = int(self.bet * 1.5)
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            update_balance(self.ctx.author.id, final_win - self.bet)
+            result = f"MATCH! Won {final_win} petals!"
             color = 0xffa500
         else:
-            update_balance(self.ctx.author.id, -self.bet)
-            result = f"No match! Lost {self.bet} petals!"
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            result = f"No match! Lost {actual_loss} petals!"
             color = 0xff0000
         
         embed = discord.Embed(title="🎰 Slot Machine", description=f"{reels[0]} | {reels[1]} | {reels[2]}\n\n{result}", color=color)
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
@@ -1356,13 +1437,24 @@ class RouletteView(View):
             mult = 2
         
         if choice == result:
-            win = self.bet * (mult if result == "green" else 1.8)
-            update_balance(self.ctx.author.id, int(win - self.bet))
-            embed = discord.Embed(title="🎡 Roulette", description=f"Ball landed on {num} ({result.upper()})\nYou won {int(win)} petals!", color=0x00ff00)
+            win_amount = self.bet * (mult if result == "green" else 1.8)
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, int(win_amount))
+            update_balance(self.ctx.author.id, final_win - self.bet)
+            embed = discord.Embed(title="🎡 Roulette", description=f"Ball landed on {num} ({result.upper()})", color=0x00ff00)
+            if buff_used:
+                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {int(win_amount)} → {final_win} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(title="🎡 Roulette", description=f"Ball landed on {num} ({result.upper()})\nYou lost {self.bet} petals!", color=0xff0000)
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            embed = discord.Embed(title="🎡 Roulette", description=f"Ball landed on {num} ({result.upper()})", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
         
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
@@ -1380,7 +1472,9 @@ class MinesButton(Button):
         
         if self.num in view.bombs:
             view.stop()
-            update_balance(view.ctx.author.id, -view.bet)
+            loss_amount = view.bet
+            actual_loss, buff_used = apply_loss_protection(view.ctx.author.id, loss_amount)
+            update_balance(view.ctx.author.id, -actual_loss)
             for c in view.children:
                 if hasattr(c, 'num') and c.num in view.bombs:
                     c.style, c.label, c.emoji = discord.ButtonStyle.danger, "💣", None
@@ -1389,7 +1483,12 @@ class MinesButton(Button):
                 else:
                     c.disabled = True
             
-            embed = discord.Embed(title="💥 BOOM!", description=f"You stepped on a bomb! Lost {view.bet} petals!", color=0xff0000)
+            embed = discord.Embed(title="💥 BOOM!", description=f"You stepped on a bomb!", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="New Balance", value=f"{get_balance(view.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=view)
         else:
             view.revealed += 1
@@ -1400,10 +1499,16 @@ class MinesButton(Button):
             
             async def co(i):
                 view.stop()
-                update_balance(view.ctx.author.id, val - view.bet)
+                win_amount = val
+                final_win, buff_used = apply_win_buffs(view.ctx.author.id, win_amount)
+                update_balance(view.ctx.author.id, final_win - view.bet)
                 for c in view.children:
                     c.disabled = True
-                embed = discord.Embed(title="💰 Cashout!", description=f"You won {val} petals!", color=0x00ff00)
+                embed = discord.Embed(title="💰 Cashout!", description=f"You cashed out with {view.revealed} safe tiles!", color=0x00ff00)
+                if buff_used:
+                    embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+                embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
+                embed.add_field(name="New Balance", value=f"{get_balance(view.ctx.author.id):,} petals", inline=False)
                 await i.response.edit_message(embed=embed, view=view)
             
             btn = discord.utils.get(view.children, label="💰 Cashout")
@@ -1448,13 +1553,24 @@ class ColorButton(Button):
         result_display = " 🎲 ".join(rolled)
         
         if hits > 0:
-            win = view.bet * hits
-            update_balance(view.ctx.author.id, win - view.bet)
-            embed = discord.Embed(title="🎉 Victory!", description=f"Result: {result_display}\nGuessed {self.color_name} - appeared {hits} times!\nYou won {win} petals!", color=0x00ff00)
+            win_amount = view.bet * hits
+            final_win, buff_used = apply_win_buffs(view.ctx.author.id, win_amount)
+            update_balance(view.ctx.author.id, final_win - view.bet)
+            embed = discord.Embed(title="🎉 Victory!", description=f"Result: {result_display}\nGuessed {self.color_name} - appeared {hits} times!", color=0x00ff00)
+            if buff_used:
+                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
-            update_balance(view.ctx.author.id, -view.bet)
-            embed = discord.Embed(title="💔 Defeat", description=f"Result: {result_display}\nGuessed {self.color_name} - didn't appear!\nYou lost {view.bet} petals!", color=0xff0000)
+            loss_amount = view.bet
+            actual_loss, buff_used = apply_loss_protection(view.ctx.author.id, loss_amount)
+            update_balance(view.ctx.author.id, -actual_loss)
+            embed = discord.Embed(title="💔 Defeat", description=f"Result: {result_display}\nGuessed {self.color_name} - didn't appear!", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
         
+        embed.add_field(name="New Balance", value=f"{get_balance(view.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=view)
 
 class ColorView(View):
@@ -1517,15 +1633,26 @@ class HigherLowerView(View):
         next_card_visual = f"{next_emoji} **{next_display}**"
         
         if (choice == "higher" and next_card > self.current_card) or (choice == "lower" and next_card < self.current_card):
-            win = int(self.bet * 1.8)
-            update_balance(self.ctx.author.id, win - self.bet)
-            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}\n\n{choice.upper()} was correct! You won {win} petals!", color=0x00ff00)
+            win_amount = int(self.bet * 1.8)
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            update_balance(self.ctx.author.id, final_win - self.bet)
+            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}", color=0x00ff00)
+            if buff_used:
+                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+            embed.add_field(name="Result", value=f"{choice.upper()} was correct! You won {final_win} petals!", inline=False)
         elif next_card == self.current_card:
             embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}\n\nTie! Bet returned!", color=0xffa500)
         else:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}\n\n{choice.upper()} was wrong! You lost {self.bet} petals!", color=0xff0000)
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"{choice.upper()} was wrong! You lost {actual_loss} petals!", inline=False)
         
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         self.game_active = False
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
@@ -1550,8 +1677,15 @@ class TowerView(View):
             return
         
         if random.random() < 0.4:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(title="🏰 Tower Climb", description=f"You fell from floor {self.floor}! Lost {self.bet} petals!", color=0xff0000)
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            embed = discord.Embed(title="🏰 Tower Climb", description=f"You fell from floor {self.floor}!", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
         else:
@@ -1567,9 +1701,14 @@ class TowerView(View):
             await interaction.response.send_message("❌ Not your game!", ephemeral=True)
             return
         
-        win = int(self.bet * self.multiplier)
-        update_balance(self.ctx.author.id, win - self.bet)
-        embed = discord.Embed(title="🏰 Tower Climb", description=f"You cashed out at floor {self.floor} and won {win} petals!", color=0x00ff00)
+        win_amount = int(self.bet * self.multiplier)
+        final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+        update_balance(self.ctx.author.id, final_win - self.bet)
+        embed = discord.Embed(title="🏰 Tower Climb", description=f"You cashed out at floor {self.floor}!", color=0x00ff00)
+        if buff_used:
+            embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+        embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
@@ -1608,16 +1747,31 @@ class ScratchView(View):
         
         if all(self.revealed):
             if self.values[0] == self.values[1] == self.values[2]:
-                win = self.bet * 3
-                update_balance(self.ctx.author.id, win - self.bet)
-                embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}\n\nJACKPOT! You won {win} petals!", color=0x00ff00)
+                win_amount = self.bet * 3
+                final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+                update_balance(self.ctx.author.id, final_win - self.bet)
+                embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}", color=0x00ff00)
+                if buff_used:
+                    embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+                embed.add_field(name="Result", value=f"JACKPOT! You won {final_win} petals!", inline=False)
             elif self.values[0] == self.values[1] or self.values[1] == self.values[2] or self.values[0] == self.values[2]:
-                win = int(self.bet * 1.5)
-                update_balance(self.ctx.author.id, win - self.bet)
-                embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}\n\nMATCH! You won {win} petals!", color=0xffa500)
+                win_amount = int(self.bet * 1.5)
+                final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+                update_balance(self.ctx.author.id, final_win - self.bet)
+                embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}", color=0xffa500)
+                if buff_used:
+                    embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+                embed.add_field(name="Result", value=f"MATCH! You won {final_win} petals!", inline=False)
             else:
-                update_balance(self.ctx.author.id, -self.bet)
-                embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}\n\nNo match! You lost {self.bet} petals!", color=0xff0000)
+                loss_amount = self.bet
+                actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+                update_balance(self.ctx.author.id, -actual_loss)
+                embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}", color=0xff0000)
+                if buff_used:
+                    embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+                else:
+                    embed.add_field(name="Result", value=f"No match! You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
         else:
@@ -1668,14 +1822,26 @@ class TreasureHuntView(View):
         
         self.attempts += 1
         if spot == self.treasure_position:
-            win = int(self.bet * 2.5)
-            update_balance(self.ctx.author.id, win - self.bet)
-            embed = discord.Embed(title="💎 Treasure Hunt", description=f"You found the treasure at spot {spot}! You won {win} petals!", color=0x00ff00)
+            win_amount = int(self.bet * 2.5)
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            update_balance(self.ctx.author.id, final_win - self.bet)
+            embed = discord.Embed(title="💎 Treasure Hunt", description=f"You found the treasure at spot {spot}!", color=0x00ff00)
+            if buff_used:
+                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
+            embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
         elif self.attempts >= self.max_attempts:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(title="💎 Treasure Hunt", description=f"You didn't find the treasure! It was at spot {self.treasure_position}. You lost {self.bet} petals!", color=0xff0000)
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            embed = discord.Embed(title="💎 Treasure Hunt", description=f"You didn't find the treasure! It was at spot {self.treasure_position}.", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
         else:
@@ -1707,8 +1873,15 @@ class RussianRouletteView(View):
         self.spins += 1
         
         if self.chambers[self.current_chamber]:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(title="💀 RUSSIAN ROULETTE", description=f"BANG! Chamber {self.current_chamber + 1} had a bullet! You lost {self.bet} petals!", color=0xff0000)
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            embed = discord.Embed(title="💀 RUSSIAN ROULETTE", description=f"BANG! Chamber {self.current_chamber + 1} had a bullet!", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
             return
@@ -1717,9 +1890,14 @@ class RussianRouletteView(View):
         remaining_bullets = sum(self.chambers[self.current_chamber:])
         
         if self.spins >= self.max_spins:
-            win = self.bet * 3
-            update_balance(self.ctx.author.id, win - self.bet)
-            embed = discord.Embed(title="🔫 RUSSIAN ROULETTE", description=f"You survived {self.max_spins} pulls! You won {win} petals!", color=0x00ff00)
+            win_amount = self.bet * 3
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            update_balance(self.ctx.author.id, final_win - self.bet)
+            embed = discord.Embed(title="🔫 RUSSIAN ROULETTE", description=f"You survived {self.max_spins} pulls!", color=0x00ff00)
+            if buff_used:
+                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
+            embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
             return
@@ -1745,6 +1923,7 @@ class RussianRouletteView(View):
         
         update_balance(self.ctx.author.id, cashout_amount - self.bet)
         embed = discord.Embed(title="🔫 RUSSIAN ROULETTE", description=f"You cashed out after {self.spins} pull(s) and won {cashout_amount} petals!", color=0x00ff00)
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
@@ -1783,12 +1962,24 @@ class RaceView(View):
         
         winner = random.randint(0, 4)
         if choice == winner:
-            win = int(self.bet * 3.5)
-            update_balance(self.ctx.author.id, win - self.bet)
-            embed = discord.Embed(title="🏇 Horse Racing", description=f"Winner: {self.horses[winner]}\nYour bet: {self.horses[choice]}\n\nYou won {win} petals!", color=0x00ff00)
+            win_amount = int(self.bet * 3.5)
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            update_balance(self.ctx.author.id, final_win - self.bet)
+            embed = discord.Embed(title="🏇 Horse Racing", description=f"Winner: {self.horses[winner]}\nYour bet: {self.horses[choice]}", color=0x00ff00)
+            if buff_used:
+                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
-            update_balance(self.ctx.author.id, -self.bet)
-            embed = discord.Embed(title="🏇 Horse Racing", description=f"Winner: {self.horses[winner]}\nYour bet: {self.horses[choice]}\n\nYou lost {self.bet} petals!", color=0xff0000)
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            embed = discord.Embed(title="🏇 Horse Racing", description=f"Winner: {self.horses[winner]}\nYour bet: {self.horses[choice]}", color=0xff0000)
+            if buff_used:
+                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
+            else:
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+        
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
 
@@ -1818,16 +2009,20 @@ class PokerView(View):
         bot_score = self.evaluate_hand(bot_cards)
         
         if player_score > bot_score:
-            win = int(self.bet * 1.8)
-            update_balance(self.ctx.author.id, win - self.bet)
-            result = f"You win {win} petals!"
+            win_amount = int(self.bet * 1.8)
+            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            update_balance(self.ctx.author.id, final_win - self.bet)
+            result = f"You won {final_win} petals!"
             color = 0x00ff00
         else:
-            update_balance(self.ctx.author.id, -self.bet)
-            result = f"You lose {self.bet} petals!"
+            loss_amount = self.bet
+            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            update_balance(self.ctx.author.id, -actual_loss)
+            result = f"You lost {actual_loss} petals!"
             color = 0xff0000
         
         embed = discord.Embed(title="🃏 Poker Showdown", description=f"Your hand: {player_display}\nBot's hand: {bot_display}\n\n{result}", color=color)
+        embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
         self.stop()
     
@@ -1935,7 +2130,7 @@ async def daily(ctx):
     if on_cd:
         await ctx.send(f"⏰ Come back in {format_time(remaining)}")
         return
-    reward = random.randint(300, 700)
+    reward = random.randint(300, 700) * get_daily_multiplier(uid)
     update_balance(uid, reward)
     set_cooldown(daily_cooldown, uid)
     await ctx.send(f"📅 You received {reward} petals!")
@@ -1947,7 +2142,7 @@ async def weekly(ctx):
     if on_cd:
         await ctx.send(f"⏰ Come back in {format_time(remaining)}")
         return
-    reward = random.randint(2000, 5000)
+    reward = random.randint(2000, 5000) * get_daily_multiplier(uid)
     update_balance(uid, reward)
     set_cooldown(weekly_cooldown, uid)
     await ctx.send(f"📅 Weekly reward: {reward} petals!")
@@ -1959,7 +2154,7 @@ async def hourly(ctx):
     if on_cd:
         await ctx.send(f"⏰ Come back in {format_time(remaining)}")
         return
-    reward = random.randint(30, 80)
+    reward = random.randint(30, 80) * get_daily_multiplier(uid)
     update_balance(uid, reward)
     set_cooldown(hourly_cooldown, uid)
     await ctx.send(f"⏰ Hourly reward: {reward} petals!")
@@ -1971,7 +2166,7 @@ async def beg(ctx):
     if on_cd:
         await ctx.send(f"⏰ Come back tomorrow! ({format_time(remaining)})")
         return
-    reward = random.randint(30, 100)
+    reward = random.randint(30, 100) * get_daily_multiplier(uid)
     update_balance(uid, reward)
     set_cooldown(beg_cooldown, uid)
     await ctx.send(f"🌸 A kind stranger gave you {reward} petals!")
@@ -1983,7 +2178,7 @@ async def farm(ctx):
     if on_cd:
         await ctx.send(f"⏰ Crops need time! ({format_time(remaining)})")
         return
-    reward = random.randint(120, 300)
+    reward = random.randint(120, 300) * get_daily_multiplier(uid)
     update_balance(uid, reward)
     set_cooldown(farm_cooldown, uid)
     await ctx.send(f"🚜 You harvested {reward} petals!")
@@ -1995,7 +2190,7 @@ async def hunt(ctx):
     if on_cd:
         await ctx.send(f"⏰ Forest needs rest! ({format_time(remaining)})")
         return
-    reward = random.randint(60, 200)
+    reward = random.randint(60, 200) * get_daily_multiplier(uid)
     update_balance(uid, reward)
     set_cooldown(hunt_cooldown, uid)
     await ctx.send(f"🏹 You found {reward} petals while hunting!")
@@ -2007,7 +2202,7 @@ async def work(ctx):
     if on_cd:
         await ctx.send(f"⏰ You're tired! ({format_time(remaining)})")
         return
-    reward = random.randint(90, 250)
+    reward = random.randint(90, 250) * get_daily_multiplier(uid)
     update_balance(uid, reward)
     set_cooldown(work_cooldown, uid)
     await ctx.send(f"💼 You earned {reward} petals from work!")
@@ -2172,25 +2367,31 @@ async def blackjack(ctx, bet: int):
     
     psum, dsum = sum(player), sum(dealer)
     
-    if psum > 21:
-        update_balance(ctx.author.id, -bet)
-        result = f"You bust! Lost {bet} petals!"
+    if psum > 21 or (dsum <= 21 and psum < dsum):
+        loss_amount = bet
+        actual_loss, buff_used = apply_loss_protection(ctx.author.id, loss_amount)
+        update_balance(ctx.author.id, -actual_loss)
+        if buff_used:
+            result = f"You lost {loss_amount} petals but were protected!"
+        else:
+            result = f"You lost {actual_loss} petals!"
         color = 0xff0000
     elif dsum > 21 or psum > dsum:
-        win = int(bet * 0.95)
-        update_balance(ctx.author.id, win)
-        result = f"You win {win} petals!"
+        win_amount = int(bet * 0.95)
+        final_win, buff_used = apply_win_buffs(ctx.author.id, win_amount)
+        update_balance(ctx.author.id, final_win)
+        if buff_used:
+            result = f"DOUBLE WIN! You won {final_win} petals! (Doubled from {win_amount})"
+        else:
+            result = f"You won {final_win} petals!"
         color = 0x00ff00
-    elif psum < dsum:
-        update_balance(ctx.author.id, -bet)
-        result = f"You lose! Lost {bet} petals!"
-        color = 0xff0000
     else:
         result = "Push! Bet returned!"
         color = 0xffa500
     
-    final_embed = discord.Embed(title="🃏 Blackjack Result", description=f"Your hand: {player} = {psum}\nDealer hand: {dealer} = {dsum}\n\n{result}", color=color)
-    await ctx.send(embed=final_embed)
+    embed = discord.Embed(title="🃏 Blackjack Result", description=f"Your hand: {player} = {psum}\nDealer hand: {dealer} = {dsum}\n\n{result}", color=color)
+    embed.add_field(name="New Balance", value=f"{get_balance(ctx.author.id):,} petals", inline=False)
+    await ctx.send(embed=embed)
 
 @bot.command()
 async def rps(ctx, choice: str, bet: int):
@@ -2207,20 +2408,35 @@ async def rps(ctx, choice: str, bet: int):
     emojis = {"rock": "🪨", "paper": "📄", "scissors": "✂️"}
     
     if choice.lower() == bot_choice:
-        update_balance(ctx.author.id, -bet)
-        result = f"Tie goes to house! You lose {bet} petals!"
+        loss_amount = bet
+        actual_loss, buff_used = apply_loss_protection(ctx.author.id, loss_amount)
+        update_balance(ctx.author.id, -actual_loss)
+        if buff_used:
+            result = f"Tie goes to house! You lost {loss_amount} petals but were protected!"
+        else:
+            result = f"Tie goes to house! You lost {actual_loss} petals!"
         color = 0xff0000
     elif (choice.lower() == "rock" and bot_choice == "scissors") or (choice.lower() == "paper" and bot_choice == "rock") or (choice.lower() == "scissors" and bot_choice == "paper"):
-        win = int(bet * 0.9)
-        update_balance(ctx.author.id, win)
-        result = f"You win {win} petals!"
+        win_amount = int(bet * 0.9)
+        final_win, buff_used = apply_win_buffs(ctx.author.id, win_amount)
+        update_balance(ctx.author.id, final_win)
+        if buff_used:
+            result = f"DOUBLE WIN! You win {final_win} petals! (Doubled from {win_amount})"
+        else:
+            result = f"You win {final_win} petals!"
         color = 0x00ff00
     else:
-        update_balance(ctx.author.id, -bet)
-        result = f"You lose {bet} petals!"
+        loss_amount = bet
+        actual_loss, buff_used = apply_loss_protection(ctx.author.id, loss_amount)
+        update_balance(ctx.author.id, -actual_loss)
+        if buff_used:
+            result = f"You lost {loss_amount} petals but were protected!"
+        else:
+            result = f"You lose {actual_loss} petals!"
         color = 0xff0000
     
     embed = discord.Embed(title="✂️ Rock Paper Scissors", description=f"You: {emojis[choice.lower()]} {choice}\nBot: {emojis[bot_choice]} {bot_choice}\n\n{result}", color=color)
+    embed.add_field(name="New Balance", value=f"{get_balance(ctx.author.id):,} petals", inline=False)
     await ctx.send(embed=embed)
 
 # Shop Commands
@@ -2290,6 +2506,7 @@ async def use(ctx, *, item: str):
         player_buffs[ctx.author.id]['luck_expiry'] = expiry
         remove_from_inventory(ctx.author.id, item_id)
         embed = discord.Embed(title="🍀 Lucky Charm Activated!", description="+5% better luck in games for 24 hours!", color=0x00ff00)
+        embed.add_field(name="Expires", value=f"<t:{int(expiry.timestamp())}:R>", inline=False)
         await ctx.send(embed=embed)
     
     elif item_id == "xp_boost":
@@ -2300,6 +2517,7 @@ async def use(ctx, *, item: str):
         player_buffs[ctx.author.id]['xp_boost_expiry'] = expiry
         remove_from_inventory(ctx.author.id, item_id)
         embed = discord.Embed(title="⚡ XP Boost Activated!", description="Daily rewards doubled for 24 hours!", color=0x00ff00)
+        embed.add_field(name="Expires", value=f"<t:{int(expiry.timestamp())}:R>", inline=False)
         await ctx.send(embed=embed)
     
     elif item_id == "protection_amulet":
@@ -2493,40 +2711,115 @@ async def pet(ctx, action: str = None, *, name: str = None):
         leveled = False
         while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
             pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
+            pet["level leveled = False
+        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
+            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
             pet["level"] += 1
+           "]:
+            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
+            pet["level"] += 1
+            leveled = True
+        
+"] += 1
             leveled = True
         
         save_all_data()
         
-        msg = f"🍖 You fed {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness}% → {pet['happiness']}% (+50 XP)"
+        msg = f"🍖 You fed {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: leveled = True
+        
+        save_all_data()
+        
+        msg = f"🍖 You fed {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness:        save_all_data()
+        
+        msg = f"🍖 You fed {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old {old_happiness}% → {pet['happiness']}% (+50 XP)"
+        if leveled:
+            msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
+        await ctx.send(msg)
+    
+    elif action.lower() == "play":
+        pet_id = pet_equipped {old_happiness}% → {pet['happiness']}% (+50 XP)"
+        if leveled:
+            msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
+        await ctx.send(msg)
+    
+    elif action.lower() == "play":
+        pet_id = pet_equipped[uid_happiness}% → {pet['happiness']}% (+50 XP)"
         if leveled:
             msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
         await ctx.send(msg)
     
     elif action.lower() == "play":
         pet_id = pet_equipped[uid]
+        pet = player_p[uid]
         pet = player_pets[uid][pet_id]
+        pet_data = pet_shop_items[pet_id]
+        
+        on_cd]
+        pet = player_pets[uid][pet_id]
+        pet_data = pet_shop_items[pet_id]
+        
+        on_cdets[uid][pet_id]
         pet_data = pet_shop_items[pet_id]
         
         on_cd, remaining = check_cooldown(pet_play_cooldown, uid, 3600)
         if on_cd:
-            await ctx.send(f"⏰ Your pet is tired! Come back in {format_time(remaining)}")
+            await ctx.send(f"⏰ Your pet, remaining = check_cooldown(pet_play_cooldown, uid, 3600)
+        if on_cd:
+            await ctx.send(f"⏰ Your pet, remaining = check_cooldown(pet_play_cooldown, uid, 3600)
+        if on_cd:
+            await ctx.send(f"⏰ Your pet is tired! Come back in {format_time( is tired! Come back in {format_time(remaining)}")
             return
         
         old_happiness = pet["happiness"]
         pet["happiness"] = min(100, pet["happiness"] + 15)
         pet["xp"] += 75
-        set_cooldown(pet_play_cooldown, uid)
+        set_cooldown(pet_play_coold is tired! Come back in {format_time(remaining)}")
+            return
+        
+        old_happiness = pet["happiness"]
+        pet["happiness"] = min(100, pet["happiness"] + 15)
+        pet["xp"] += 75
+        set_cooldown(pet_play_cooldremaining)}")
+            return
+        
+        old_happiness = pet["happiness"]
+        pet["happiness"] = min(100, pet["happiness"] + 15)
+        pet["xp"] += 75
+        set_cooldown(pet_playown, uid)
         
         leveled = False
-        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
+        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_levelown, uid)
+        
+        leveled = False
+        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["_cooldown, uid)
+        
+        leveled = False
+        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet"]:
             pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
             pet["level"] += 1
             leveled = True
         
         save_all_data()
         
-        msg = f"🎾 You played with {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness}% → {pet['happiness']}% (+75 XP)"
+        msg = fmax_level"]:
+            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
+            pet["level"] += 1
+            leveled = True
+        
+        save_all_data()
+        
+        msg = f"🎾 You_data["max_level"]:
+            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
+            pet["level"] += 1
+            leveled = True
+        
+        save_all_data()
+        
+        msg = f"🎾 You played with"🎾 You played with {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness} played with {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness}% → {pet['happiness']}% (+75 XP)"
+        if leveled:
+            msg += f"\n🎉 LEVEL UP {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness}% → {pet['happiness']}% (+75 XP)"
+        if leveled:
+            msg += f"\n🎉 LEVEL UP% → {pet['happiness']}% (+75 XP)"
         if leveled:
             msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
         await ctx.send(msg)
@@ -2536,27 +2829,93 @@ async def pet(ctx, action: str = None, *, name: str = None):
         pet = player_pets[uid][pet_id]
         pet_data = pet_shop_items[pet_id]
         
-        on_cd, remaining = check_cooldown(pet_cooldown, uid)
+        on_cd, remaining =! Your pet reached level {pet['level']}! 🎉"
+        await ctx.send(msg)
+    
+    elif action.lower() == "collect":
+        pet_id = pet_equipped[uid]
+        pet = player_pets[uid][pet_id]
+        pet_data = pet_shop_items[pet_id]
+        
+        on_cd, remaining =! Your pet reached level {pet['level']}! 🎉"
+        await ctx.send(msg)
+    
+    elif action.lower() == "collect":
+        pet_id = pet_equipped[uid]
+        pet = player_pets[uid][pet_id]
+        pet_data = pet_shop_items[pet_id]
+        
+        on_cd, remaining = check_cooldown(pet_cooldown, check_cooldown(pet_cooldown, check_cooldown(pet_cooldown, uid)
         if on_cd:
             await ctx.send(f"⏰ Come back tomorrow! ({format_time(remaining)})")
             return
         
-        reward = pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200))
+        reward = pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) uid)
+        if on_cd:
+            await ctx.send(f"⏰ Come back tomorrow! ({format_time(remaining)})")
+            return
+        
+        reward = pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] /  uid)
+        if on_cd:
+            await ctx.send(f"⏰ Come back tomorrow! ({format_time(remaining)})")
+            return
+        
+        reward = pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] + int(pet_data['daily_reward']100)) + int(pet_data['daily_reward'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200))
         update_balance(uid, reward)
         pet["xp"] += 25
         set_cooldown(pet_cooldown, uid)
         
         leveled = False
-        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
+        while * (pet['happiness'] / 200))
+        update_balance(uid, reward)
+        pet["xp"] += 25
+        set_cooldown(pet_cooldown, uid)
+        
+        leveled = False
+        while pet["xp"] >= pet * (pet['happiness'] / 200))
+        update_balance(uid, reward)
+        pet["xp"] += 25
+        set_cooldown(pet_cooldown, uid)
+        
+        leveled = False
+ pet["xp"] >= pet_data['xp_per_level'] * pet_data['xp_per_level'] * pet        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
+            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
+            pet["level"] += 1
+            leveled = True
+        
+        save["level"] and pet["level"] < pet_data["max_level"]:
+            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
+            pet["level"] += 1
+            leveled = True
+        
+        save["level"] and pet["level"] < pet_data["max_level"]:
             pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
             pet["level"] += 1
             leveled = True
         
         save_all_data()
         
-        msg = f"💰 {pet_data['emoji']} {pet.get('name', pet_data['name'])} gave you {reward:,} petals! (+25 XP)"
+        msg = f"💰_all_data()
+        
+        msg = f"💰_all_data()
+        
+        msg = f"💰 {pet_data['emoji']} {pet.get('name', pet_data['name'])} gave you {reward:,} {pet_data['emoji']} {pet.get('name', pet_data['name'])} gave you {reward:,} {pet_data['emoji']} {pet.get('name', pet_data['name'])} gave you {reward:,} petals! (+25 XP)"
+        if leveled:
+            msg += f"\n🎉 LEVEL UP! Your pet reached level {pet[' petals! (+25 XP)"
+        if leveled:
+            msg += f"\n🎉 LEVEL UP! Your pet reached level {pet[' petals! (+25 XP)"
         if leveled:
             msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
+        await ctx.send(msg)
+    
+    elif action.lower() == "rename":
+        if not name:
+            await ctx.send("❌ Please provide a new name! Example: `b!pet rename Fluffylevel']}! 🎉"
+        await ctx.send(msg)
+    
+    elif action.lower() == "rename":
+        if not name:
+            await ctx.send("❌ Please provide a new name! Example: `b!pet renamelevel']}! 🎉"
         await ctx.send(msg)
     
     elif action.lower() == "rename":
@@ -2568,12 +2927,50 @@ async def pet(ctx, action: str = None, *, name: str = None):
             return
         
         pet_id = pet_equipped[uid]
-        old_name = player_pets[uid][pet_id].get('name', pet_shop_items[pet_id]['name'])
+        old Fluffy`")
+            return
+        if len(name) > 20:
+            await ctx.send("❌ Name too long! Max 20 characters.")
+            return
+        
+        pet_id = pet_equipped[uid]
+        old_name =`")
+            return
+        if len(name) > 20:
+            await ctx.send("❌ Name too long! Max 20 characters.")
+            return
+        
+        pet_id = pet_equipped[uid]
+        old_name = player_p_name = player_pets[uid][pet_id].get('name', pet_shop_items[pet_id]['name'])
+        player_pets player_pets[uid][pet_id].get('name', pet_shop_items[pet_id]['name'])
         player_pets[uid][pet_id]['name'] = name
+        save_all_data()
+        await ctx.send(f"✅ Your pet {old_name} is now named **ets[uid][pet_id].get('name', pet_shop_items[pet_id]['name'])
+        player_pets[uid][pet_id]['name'] = name
+        save_all_data()
+        await ctx.send(f"✅ Your pet {old_name} is now named **[uid][pet_id]['name'] = name
         save_all_data()
         await ctx.send(f"✅ Your pet {old_name} is now named **{name}**!")
     
+    elif action.lower() =={name}**!")
+    
     elif action.lower() == "equip":
+        if not name:
+            await ctx.send("❌ Please provide a pet name! Example: `b!pet equip \"Garden Cat\"`")
+            return
+        
+        found = None
+        for pid, pet in player_pets[uid].items():
+            pet_data ={name}**!")
+    
+    elif action.lower() == "equip":
+        if not name:
+            await ctx.send("❌ Please provide a pet name! Example: `b!pet equip \"Garden Cat\"`")
+            return
+        
+        found = None
+        for pid, pet in player_pets[uid].items():
+            pet_data = "equip":
         if not name:
             await ctx.send("❌ Please provide a pet name! Example: `b!pet equip \"Garden Cat\"`")
             return
@@ -2583,13 +2980,46 @@ async def pet(ctx, action: str = None, *, name: str = None):
             pet_data = pet_shop_items[pid]
             if pet.get('name', pet_data['name']).lower() == name.lower():
                 found = pid
+                pet_shop_items[pid]
+            if pet.get('name', pet_data['name']).lower() == name.lower():
+                found = pid
+                pet_shop_items[pid]
+            if pet.get('name', pet_data['name']).lower() == name.lower():
+                found = pid
                 break
         
         if found:
             pet_equipped[uid] = found
             save_all_data()
             pet_data = pet_shop_items[found]
-            await ctx.send(f"✅ Equipped {pet_data['emoji']} {pet_data['name']} as your active pet!")
+            await ctx.send(f break
+        
+        if found:
+            pet_equipped[uid] = found
+            save_all_data()
+            pet_data = pet_shop_items[found]
+            await ctx break
+        
+        if found:
+            pet_equipped[uid] = found
+            save_all_data()
+            pet_data = pet_shop_items[found]
+            await ctx.send(f"✅ Equipped {pet"✅ Equipped {pet_data['emoji']} {pet_data['name']} as your active pet!")
+        else:
+            await ctx.send(f".send(f"✅ Equipped {pet_data['emoji']} {pet_data['name']} as your active pet!")
+        else:
+            await ctx.send(f"❌ Could not find a pet named '{name}'!")
+    
+    else:
+        await ctx.send("❌ Invalid action! Use: `feed`, `play`, `collect`, `rename`, or `equip`")
+
+@❌ Could not find a pet named '{name}'!")
+    
+    else:
+        await ctx.send("❌ Invalid action! Use: `feed`, `play`, `collect`, `rename`, or `equip`")
+
+@bot.command()
+async def pet_data['emoji']} {pet_data['name']} as your active pet!")
         else:
             await ctx.send(f"❌ Could not find a pet named '{name}'!")
     
@@ -2597,7 +3027,12 @@ async def pet(ctx, action: str = None, *, name: str = None):
         await ctx.send("❌ Invalid action! Use: `feed`, `play`, `collect`, `rename`, or `equip`")
 
 @bot.command()
+asyncbot.command()
 async def petstats(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    uid = target.id
+    
+    if uidstats(ctx, member: discord.Member = None):
     target = member or ctx.author
     uid = target.id
     
@@ -2605,7 +3040,24 @@ async def petstats(ctx, member: discord.Member = None):
         await ctx.send(f"❌ {target.name} doesn't have any pets!")
         return
     
+    if uid not in pet def petstats(ctx, member: discord.Member = None):
+    target = member or ctx.author
+    uid = target.id
+    
+    if uid not in player_pets or not player_pets[uid]:
+        await ctx.send(f"❌ {target.name} doesn't have any pets!")
+        return
+    
+    if uid not in not in player_pets or not player_pets[uid]:
+        await ctx.send(f"❌ {target.name} doesn't have any pets!")
+        return
+    
     if uid not in pet_equipped:
+        pet_equ_equipped:
+        pet_equipped[uid] = list(player_pets[uid].keys())[0]
+        save_all_data()
+    
+    pet_id pet_equipped:
         pet_equipped[uid] = list(player_pets[uid].keys())[0]
         save_all_data()
     
@@ -2613,13 +3065,48 @@ async def petstats(ctx, member: discord.Member = None):
     pet = player_pets[uid][pet_id]
     pet_data = pet_shop_items[pet_id]
     
-    happiness = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet["happiness"] // 10))
+    happiness = "❤️"ipped[uid] = list(player_pets[uid].keys())[0]
+        save_all_data()
+    
+    pet_id = pet_equipped[uid]
+    pet = player_pets[uid][pet_id]
+    pet_data = pet_shop_items[pet_id]
+    
+    happiness = = pet_equipped[uid]
+    pet = player_pets[uid][pet_id]
+    pet_data = pet_shop_items[pet_id]
+    
+    happiness = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet[" * (pet["happiness"] // 10) + "🖤" * (10 - ( "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (happiness"] // 10))
+    xp_needed = pet_data['xp_per_level'] * pet['level']
+    xp_bar = "🟢" * int((pet["xp"] / xp_needed) * 20) + "pet["happiness"] // 10))
     xp_needed = pet_data['xp_per_level'] * pet['level']
     xp_bar = "🟢" * int((pet["xp"] / xp_needed) * 20) + "⚫" * (20 - int((pet["xp"] / xp_needed) * 20)) if xp_needed > 0 else "🟢" * 20
     
-    embed = discord.Embed(title=f"🐾 {target.name}'s Pet", description=f"{pet_data['emoji']} **{pet.get('name', pet_data['name'])}** [{pet_data['rarity'].title()}]", color=0xff69b4)
-    embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{xp_needed:,}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals", inline=False)
+    embed = discord.Embed(title=f"🐾 {target.name}'pet["happiness"] // 10))
+    xp_needed = pet_data['xp_per_level'] * pet['level']
+    xp_bar = "🟢" * int((pet["xp"] / xp_needed) * 20) + "⚫" * (20 - int((pet["xp"] / xp_needed) * 20)) if xp_needed > 0 else "🟢" * 20
+    
+    embed = discord.Embed(title=f"🐾 {target⚫" * (20 - int((pet["xp"] / xp_needed) * 20)) if xp_needed > 0 else "🟢" * 20
+    
+    embed = discord.Embed(title=f"🐾 {target.name}'s Pet", description=f"{pet_data['emoji']} **{pet.get('name', pet_data['name'])}** [{pet_data['rarity'].title().name}'s Pet", description=f"{pet_data['emoji']} **{pet.get('name', pet_data['name'])}** [{pet_data['rarity'].title()s Pet", description=f"{pet_data['emoji']} **{pet.get('name', pet_data['name'])}** [{pet_data['rarity'].title()}]", color=0xff69b4)
+    embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP}]", color=0xff69b4)
+    embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP}]", color=0xff69b4)
+    embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{xp_ne:** {pet['xp']:,}/{xp_needed:,:** {pet['xp']:,}/{xp_needed:,}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['eded:,}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_re}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200ward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals", inline=False)
+    await ctx.send} petals", inline=False)
+    await ctx.send)):,} petals", inline=False)
     await ctx.send(embed=embed)
+
+# Duel Command
+@bot.command()
+async def duel(ctx(embed=embed)
+
+# Duel Command
+@bot.command()
+async def duel(ctx, opponent: discord.Member, bet: int):
+    if opponent == ctx.author:
+        await ctx.send("❌ You can't duel yourself!")
+        return
+    if bet(embed=embed)
 
 # Duel Command
 @bot.command()
@@ -2628,10 +3115,29 @@ async def duel(ctx, opponent: discord.Member, bet: int):
         await ctx.send("❌ You can't duel yourself!")
         return
     if bet < 50:
-        await ctx.send("❌ Minimum bet is 50 petals!")
+       , opponent: discord.Member, bet: int):
+    if opponent == ctx.author:
+        await ctx.send("❌ You can't duel yourself!")
+        return
+    if bet < 50:
+        await ctx.send(" < 50:
+        await ctx.send("❌ await ctx.send("❌ Minimum bet is 50 petals!")
         return
     if get_balance(ctx.author.id) < bet:
         await ctx.send(f"❌ You need {bet} petals!")
+        return
+    
+    embed = discord.Embed(title="⚔️ Duel Challenge!", description=f"{ctx.author.mention} challenges❌ Minimum bet is 50 petals!")
+        return
+    if get_balance(ctx.author.id) < bet:
+        await Minimum bet is 50 petals!")
+        return
+    if get_balance(ctx.author.id) < bet:
+        await ctx.send(f"❌ You need {bet} petals!")
+        return
+    
+    embed = discord.Embed(title="⚔️ Duel Challenge!", description=f"{ctx.author.mention} challenges {opponent.mention} to a duel for {bet} petals!\n\n{opponent.mention}, do you accept?", color=0xffa500)
+    await ctx.send(embed=embed ctx.send(f"❌ You need {bet} petals!")
         return
     
     embed = discord.Embed(title="⚔️ Duel Challenge!", description=f"{ctx.author.mention} challenges {opponent.mention} to a duel for {bet} petals!\n\n{opponent.mention}, do you accept?", color=0xffa500)
@@ -2640,23 +3146,72 @@ async def duel(ctx, opponent: discord.Member, bet: int):
 # Redeem Command
 @bot.command()
 async def redeem(ctx):
-    embed = discord.Embed(title="🎟️ Redeem Code", description="Click the button below to redeem a voucher code!", color=0xff69b4)
+    embed = discord.Embed(title="🎟️ Redeem {opponent.mention} to a duel for {bet} petals!\n\n{opponent.mention}, do you accept?", color=0xffa500)
+    await ctx.send(embed=embed, view=DuelView(ctx, opponent, bet))
+
+# Redeem Command
+@bot.command()
+async def redeem(ctx):
+    embed = discord.Embed(title="🎟️ Redeem Code", description="Click the button below to redeem, view=DuelView(ctx, opponent, bet))
+
+# Redeem Command
+@bot.command()
+async def redeem(ctx):
+    embed = discord.Embed(title="🎟️ Redeem Code", description="Click the button below to redeem a voucher Code", description="Click the button below to redeem a voucher code!", color=0xff69b4)
+    await ctx.send(embed=embed, view=RedeemButtonView())
+
+ a voucher code!", color=0xff69b4)
     await ctx.send(embed=embed, view=RedeemButtonView())
 
 # Admin Commands
 @bot.command()
 async def gen(ctx, code: str, value: int, uses: int):
     if ctx.author.name not in ADMINS:
+        await ctx code!", color=0xff69b4)
+    await ctx.send(embed=embed, view=RedeemButtonView())
+
+# Admin Commands
+@bot.command()
+async def gen(ctx, code: str, value: int, uses: int):
+    if ctx.author.name not in ADMINS:
+        await ctx.send("❌# Admin Commands
+@bot.command()
+async def gen(ctx, code: str, value: int, uses: int):
+    if ctx.author.name not in ADMINS:
         await ctx.send("❌ No permission!")
+        return
+    redeem_codes[code.send("❌ No permission!")
+        return
+    redeem_codes No permission!")
         return
     redeem_codes[code.upper()] = {"value": value, "uses": uses}
     save_all_data()
-    await ctx.send(f"✅ Generated code `{code.upper()}` worth {value} petals ({uses} uses)")
+    await ctx.send(f".upper()] = {"value": value, "uses": uses}
+    save_all_data()
+    await ctx.send(f"[code.upper()] = {"value": value, "uses": uses}
+    save_all_data()
+    await ctx.send✅ Generated code `{code.upper()}` worth {value} petals ({uses} uses)")
+
+@bot.command()
+async def give(ctx, member: discord.Member, amount: int):
+    if ctx.author.name not✅ Generated code `{code.upper()}` worth {value} petals ({uses} uses)")
+
+@bot.command()
+async def give(ctx, member: discord.Member, amount: int):
+    if ctx.author.name not in ADMINS(f"✅ Generated code `{code.upper()}` worth {value} petals ({uses} uses)")
 
 @bot.command()
 async def give(ctx, member: discord.Member, amount: int):
     if ctx.author.name not in ADMINS:
+        in ADMINS:
         await ctx.send("❌ No permission!")
+        return
+    update_balance(member.id, amount)
+    await ctx.send(f"✅ Gave {amount} petals to {member:
+        await ctx.send("❌ No permission!")
+        return
+    update_balance(member.id, amount)
+    await ctx.send(f" await ctx.send("❌ No permission!")
         return
     update_balance(member.id, amount)
     await ctx.send(f"✅ Gave {amount} petals to {member.mention}")
@@ -2665,13 +3220,47 @@ async def give(ctx, member: discord.Member, amount: int):
 async def reset_cooldowns(ctx, member: discord.Member = None):
     if ctx.author.name not in ADMINS:
         await ctx.send("❌ No permission!")
+       .mention}")
+
+@bot.command()
+async def reset_cooldowns(ctx, member: discord.Member = None):
+    if ctx.author.name not in ADMINS:
+        await ctx.send("❌ No permission!")
         return
+    target = member or ctx✅ Gave {amount} petals to {member.mention}")
+
+@bot.command()
+async def reset_cooldowns(ctx, member: discord.Member = None):
+    if ctx.author.name not in ADMINS:
+        await ctx.send("❌ No permission!")
+        return
+    target return
     target = member or ctx.author
     for cd in [beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown, daily_cooldown, weekly_cooldown, hourly_cooldown, pet_cooldown]:
         if target.id in cd:
             del cd[target.id]
+    save_all.author
+    for cd in [beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown, daily_cooldown, weekly_cooldown, hourly_cooldown, pet_cooldown]:
+        if target.id in cd:
+            del cd[target.id]
     save_all_data()
-    await ctx.send(f"✅ Reset all cooldowns for {target.mention}")
+ = member or ctx.author
+    for cd in [beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown, daily_cooldown, weekly_cooldown, hourly_cooldown, pet_cooldown]:
+        if target.id in cd:
+            del cd[target.id]
+    save_all_data()
+    await_data()
+    await ctx.send(f"✅ Reset all cooldowns    await ctx.send(f"✅ Reset all cooldowns for { ctx.send(f"✅ Reset all cooldowns for {target.mention}")
+
+@bot.command()
+async def add_item(ctx, member: discord.Member, item: str for {target.mention}")
+
+@bot.command()
+async def add_item(ctx, member: discord.Member, item: str, qty: int = 1):
+    if ctx.author.name not in ADMINS:
+        await ctx.send("❌ No permission!")
+        return
+    item_id = Nonetarget.mention}")
 
 @bot.command()
 async def add_item(ctx, member: discord.Member, item: str, qty: int = 1):
@@ -2679,19 +3268,54 @@ async def add_item(ctx, member: discord.Member, item: str, qty: int = 1):
         await ctx.send("❌ No permission!")
         return
     item_id = None
+   , qty: int = 1):
+    if ctx.author.name not in ADMINS:
+        await ctx.send("❌ No permission!")
+        return
+    item_id = None
     for key, val in shop_items.items():
+        if val
+    for key, val in shop_items.items():
+        if val for key, val in shop_items.items():
         if val['name'].lower() == item.lower():
+            item_id = key
+            break
+    if not item_id:
+        await ctx.send(f"❌ Item '{item}' not found['name'].lower() == item.lower():
             item_id = key
             break
     if not item_id:
         await ctx.send(f"❌ Item '{item}' not found!")
         return
     add_to_inventory(member.id, item_id, qty)
+    await ctx.send(f"✅ Added {qty}x {shop_items[item_id]['name']['name'].lower() == item.lower():
+            item_id = key
+            break
+    if not item_id:
+        await ctx.send(f"❌ Item '{item}' not found!")
+        return
+    add_to_inventory(member.id, item_id, qty)
+    await ctx.send(f"✅ Added {qty}x {shop_items[item_id]['!")
+        return
+    add_to_inventory(member.id, item_id, qty)
     await ctx.send(f"✅ Added {qty}x {shop_items[item_id]['name']} to {member.mention}")
 
 @bot.command()
 async def add_pet(ctx, member: discord.Member, pet_name: str):
+    if ctx.author.name not} to {member.mention}")
+
+@bot.command()
+async def add_pet(ctx, member: discord.Member, pet_name: str):
+    if ctx.authorname']} to {member.mention}")
+
+@bot.command()
+async def add_pet(ctx, member: discord.Member, pet_name: str):
     if ctx.author.name not in ADMINS:
+        await ctx.send("❌ No permission!")
+        return
+    pet_id = None
+    for key, val in pet_shop_items.items():
+        if val['name'].lower() == pet in ADMINS:
         await ctx.send("❌ No permission!")
         return
     pet_id = None
@@ -2706,7 +3330,48 @@ async def add_pet(ctx, member: discord.Member, pet_name: str):
     if member.id not in player_pets:
         player_pets[member.id] = {}
     player_pets[member.id][pet_id] = {
-        "name": pet_shop_items[pet_id]['name'],
+        "name": pet_shop_items[pet.name not in ADMINS:
+        await ctx.send("❌ No permission!")
+        return
+    pet_id = None
+    for key, val in pet_shop_items.items():
+        if val['name'].lower() == pet_name.lower():
+            pet_id = key
+            break
+    if not pet_id:
+        await ctx.send(f"❌ Pet '{pet_name}' not found!")
+        return
+    
+    if member.id not in player_pets:
+        player_pets[member.id] = {}
+    player_pets[member.id][pet_id] = {
+        "name": pet_shop_items_name.lower():
+            pet_id = key
+            break
+    if not pet_id:
+        await ctx.send(f"❌ Pet '{pet_name}' not found!")
+        return
+    
+    if member.id not in player_pets:
+        player_pets[member.id] = {}
+    player_pets[member.id][pet_id] = {
+        "name": pet_shop_items_id]['name'],
+        "level": 1,
+        "xp": 0,
+        "happiness": 100,
+        "last_fed": datetime.now(),
+        "last_played": datetime.now()
+    }
+    save_all_data()
+    await ctx.send(f"✅ Added pet[pet_id]['name'],
+        "level": 1,
+        "xp": 0,
+        "happiness": 100,
+        "last_fed": datetime.now(),
+        "last_played": datetime.now()
+    }
+    save_all_data()
+    await ctx.send(f"✅[pet_id]['name'],
         "level": 1,
         "xp": 0,
         "happiness": 100,
@@ -2717,7 +3382,22 @@ async def add_pet(ctx, member: discord.Member, pet_name: str):
     await ctx.send(f"✅ Added pet {pet_shop_items[pet_id]['name']} to {member.mention}")
 
 @bot.command()
-async def remove_pet(ctx, member: discord.Member, pet_name: str):
+async def remove_pet(ctx, {pet_shop_items[pet_id]['name']} to {member.mention}")
+
+@bot.command()
+async def remove_pet(ctx, member: Added pet {pet_shop_items[pet_id]['name']} to {member.mention}")
+
+@bot.command()
+async def remove_pet member: discord.Member, pet_name: str):
+    if ctx.author.name not in ADMINS:
+        await ctx.send("❌ No permission!")
+        return
+    discord.Member, pet_name: str):
+    if ctx.author.name not in ADMINS:
+        await ctx.send("❌ No permission!")
+        return
+    pet_id = None
+    for key, val in pet_shop_items.items(ctx, member: discord.Member, pet_name: str):
     if ctx.author.name not in ADMINS:
         await ctx.send("❌ No permission!")
         return
@@ -2731,10 +3411,45 @@ async def remove_pet(ctx, member: discord.Member, pet_name: str):
         return
     
     if member.id in player_pets and pet_id in player_pets[member.id]:
+        pet_id = None
+    for key, val in pet_shop_items.items():
+        if val['name'].lower() == pet_name.lower():
+            pet_id = key
+            break
+    if not pet_id:
+       ():
+        if val['name'].lower() == pet_name.lower():
+            pet_id = key
+            break
+    if not pet_id:
+        await ctx.send(f"❌ Pet '{pet_name}' not found!")
+        return
+    
+    if member.id in player_pets and pet_id in player_pets[member.id]:
+        del player_pets[member del player_pets[member.id][pet_id]
+        if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
+            del pet_equipped await ctx.send(f"❌ Pet '{pet_name}' not found!")
+        return
+    
+    if member.id in player_pets and pet_id in player_pets[member.id]:
         del player_pets[member.id][pet_id]
         if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
+            del pet_equipped.id][pet_id]
+        if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
             del pet_equipped[member.id]
+       [member.id]
         save_all_data()
+        await ctx.send(f"✅ Removed pet {pet_name} from {member.mention}")
+    else:
+        await ctx.send(f"❌ {member.mention} doesn't own that pet!")
+
+@[member.id]
+        save_all_data()
+        await ctx.send(f"✅ Removed pet {pet_name} from {member.mention}")
+    else:
+        await ctx.send(f"❌ {member.mention} doesn't own that pet!")
+
+@ save_all_data()
         await ctx.send(f"✅ Removed pet {pet_name} from {member.mention}")
     else:
         await ctx.send(f"❌ {member.mention} doesn't own that pet!")
@@ -2746,13 +3461,53 @@ async def setup(ctx):
         return
     server_channels[ctx.guild.id] = ctx.channel.id
     save_all_data()
-    await ctx.send(f"✅ Leaderboard channel set to {ctx.channel.mention}")
+    await ctx.send(f"✅ Leaderboard channel set to {ctx.channelbot.command()
+async def setup(ctx):
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Admin only!")
+        return
+    server_channels[ctx.guild.id] = ctx.channel.id
+    save_all_data()
+    await ctx.send(f"✅ Leaderboard channel set to {ctx.channelbot.command()
+async def setup(ctx):
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.send("❌ Admin only!")
+        return
+    server_channels[ctx.guild.id] = ctx.channel.id
+    save_all_data()
+    await ctx.send(f"✅ Leaderboard channel set to {ctx.mention}")
 
 @bot.command()
 @commands.is_owner()
 async def add_admin(ctx, username: str):
     if username not in ADMINS:
         ADMINS.append(username)
+        await.mention}")
+
+@bot.command()
+@commands.is_owner()
+async def add_admin(ctx, username: str):
+    if username not in ADMINS:
+        ADMINS.append.channel.mention}")
+
+@bot.command()
+@commands.is_owner()
+async def add_admin(ctx, username: str):
+    if username not in ADMINS:
+        ADMINS.append(username)
+        await ctx.send(f"✅ Added {username} as admin!")
+
+@bot.command()
+async def admins(ctx):
+    await ctx.send(f"👑 Admins: {', '.join(ADMINS)}")
+
+# Auto-save ctx.send(f"✅ Added {username} as admin!")
+
+@bot.command()
+async def admins(ctx):
+    await ctx.send(f"👑 Admins: {', '.join(ADMINS)}")
+
+# Auto-save and leader(username)
         await ctx.send(f"✅ Added {username} as admin!")
 
 @bot.command()
@@ -2766,30 +3521,96 @@ async def auto_save():
         save_all_data()
         print("💾 Auto-saved all data!")
 
-@tasks.loop(hours=1)
+@ and leaderboard tasks
+async def auto_save():
+    while True:
+        await asyncio.sleep(60)
+        save_all_data()
+        print("💾 Auto-saved all data!")
+
+@tasks.lboard tasks
+async def auto_save():
+    while True:
+        await asyncio.sleep(60)
+        save_all_data()
+        print("💾 Auto-saved all data!")
+
+@tasks.ltasks.loop(hours=1)
 async def hourly_leaderboard():
     for gid, cid in server_channels.items():
         channel = bot.get_channel(cid)
         if channel and economy:
-            top = sorted(economy.items(), key=lambda x: x[1], reverse=True)[:5]
+            top = sorted(economy.items(), key=lambdaoop(hours=1)
+async def hourly_leaderboard():
+    for gid, cid in server_channels.items():
+        channel = bot.get_channel(cid)
+        if channel and economy:
+            top = sorted(economy.items(), key=lambda xoop(hours=1)
+async def hourly_leaderboard():
+    for gid, cid in server_channels.items():
+        channel = bot.get_channel(cid)
+        if channel and economy:
+            top = sorted(economy.items(), key=lambda x: x[1], reverse=True x: x[1],: x[1], reverse=True)[:5]
+            if top:
+                desc = ""
+                for i, (uid, bal) in enumerate(top, 1):
+)[:5]
             if top:
                 desc = ""
                 for i, (uid, bal) in enumerate(top, 1):
                     medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
+                    user = await bot.fetch_user reverse=True)[:5]
+            if top:
+                desc = ""
+                for i, (uid, bal) in enumerate(top, 1):
+                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
+                    user =                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
                     user = await bot.fetch_user(uid)
+                    desc += f"{medal(uid)
+                    desc += f"{medal} ** await bot.fetch_user(uid)
                     desc += f"{medal} **{i}.** {user.name} — `{bal:,}` petals\n"
+                embed = discord.Embed(title="} **{i}.** {user.name} — `{bal:,}` petals\n"
+                embed = discord.Embed(title="🏆 Hourly Leaderboard", description=desc, color=0xffb7c5)
+                await channel.send(embed=embed)
+
+@bot.event
+async def on_ready():
+    print(f'🌸 {bot.user} is online!{i}.** {user.name} — `{bal:,}` petals\n"
                 embed = discord.Embed(title="🏆 Hourly Leaderboard", description=desc, color=0xffb7c5)
                 await channel.send(embed=embed)
 
 @bot.event
 async def on_ready():
     print(f'🌸 {bot.user} is online!')
+   🏆 Hourly Leaderboard", description=desc, color=0xffb7c5)
+                await channel.send(embed=embed)
+
+@bot.event
+async def on_ready():
+    print(f'🌸 {bot.user} is online!')
     print(f'📊 Serving {len(bot.guilds)} servers')
+    print(f'💾 Database: {"MongoDB" if USE_MONGODB else')
+    print(f'📊 Serving {len(bot.guilds)} servers')
+    print(f'💾 Database: {"MongoDB" if USE_MONGOD print(f'📊 Serving {len(bot.guilds)} servers')
     print(f'💾 Database: {"MongoDB" if USE_MONGODB else "Local File"}')
     print(f'👑 Admins: {", ".join(ADMINS)}')
     bot.loop.create_task(auto_save())
     if not hourly_leaderboard.is_running():
+        hourly_ "Local File"}')
+    print(f'👑 Admins: {", ".join(ADMINS)}')
+    bot.loop.create_task(auto_save())
+    if not hourly_leaderboard.is_running():
         hourly_leaderboard.start()
+
+# Run the bot
+keepB else "Local File"}')
+    print(f'👑 Admins: {", ".join(ADMINS)}')
+    bot.loop.create_task(auto_save())
+    if not hourly_leaderboard.is_running():
+        hourly_leaderboard.start()
+
+# Run the bot
+keepleaderboard.start()
 
 # Run the bot
 keep_alive()
