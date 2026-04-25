@@ -544,7 +544,6 @@ def format_time(seconds):
 
 # --- BUFF HANDLING FUNCTIONS ---
 def apply_win_buffs(user_id, win_amount):
-    """Apply double win token buff and return the modified win amount"""
     if user_id in player_buffs and player_buffs[user_id].get('double_win', 0) > 0:
         win_amount = win_amount * 2
         player_buffs[user_id]['double_win'] -= 1
@@ -555,7 +554,6 @@ def apply_win_buffs(user_id, win_amount):
     return win_amount, False
 
 def apply_loss_protection(user_id, loss_amount):
-    """Apply protection amulet buff and return whether the loss is prevented"""
     if user_id in player_buffs and player_buffs[user_id].get('protection', 0) > 0:
         player_buffs[user_id]['protection'] -= 1
         if player_buffs[user_id]['protection'] <= 0:
@@ -564,18 +562,7 @@ def apply_loss_protection(user_id, loss_amount):
         return 0, True
     return loss_amount, False
 
-def apply_luck_buff(user_id):
-    """Check if user has lucky charm active"""
-    if user_id in player_buffs and player_buffs[user_id].get('luck'):
-        expiry = player_buffs[user_id].get('luck_expiry')
-        if expiry and expiry > datetime.now():
-            return True
-        else:
-            player_buffs[user_id]['luck'] = False
-    return False
-
 def get_daily_multiplier(user_id):
-    """Get daily reward multiplier from XP boost"""
     if user_id in player_buffs and player_buffs[user_id].get('xp_boost'):
         expiry = player_buffs[user_id].get('xp_boost_expiry')
         if expiry and expiry > datetime.now():
@@ -589,7 +576,6 @@ load_all_data()
 
 # --- UI VIEWS ---
 
-# Redeem Modal
 class RedeemModal(Modal, title="🌸 Redeem Petals"):
     code_input = TextInput(label="Voucher Code", placeholder="Enter your code...", min_length=1, max_length=20)
     
@@ -1221,7 +1207,7 @@ class ConfirmUseView(View):
         await interaction.response.edit_message(content="❌ Item use cancelled!", embed=None, view=None)
         self.stop()
 
-# --- GAME VIEWS WITH BUFF SUPPORT ---
+# --- GAME VIEWS ---
 
 class CrashView(View):
     def __init__(self, ctx, bet):
@@ -2094,7 +2080,7 @@ async def help(ctx):
     embed = discord.Embed(title="🌸 Blossom Garden Bot", description="Here are all my commands:", color=0xffb7c5)
     embed.add_field(name="💰 **Economy**", value="`bal`, `lb`, `daily`, `weekly`, `hourly`, `beg`, `farm`, `hunt`, `work`", inline=False)
     embed.add_field(name="🎲 **Games**", value="`crash`, `mines`, `color`, `coinflip`, `dice`, `slots`, `roulette`, `blackjack`, `rps`, `higherlower`, `tower`, `scratch`, `treasure`, `roulettegun`, `race`, `poker`", inline=False)
-    embed.add_field(name="🛒 **Shop**", value="`shop`, `petshop`, `inventory` (click buttons to use items), `buffs`", inline=False)
+    embed.add_field(name="🛒 **Shop**", value="`shop`, `petshop`, `inventory`, `buffs`", inline=False)
     embed.add_field(name="🐾 **Pets**", value="`mypets`, `pet`, `petstats`", inline=False)
     embed.add_field(name="⚔️ **Duel**", value="`duel @user <bet>`", inline=False)
     embed.add_field(name="🎁 **Gifting**", value="`gift @user <amount>`, `giftstats`", inline=False)
@@ -2389,9 +2375,9 @@ async def blackjack(ctx, bet: int):
         result = "Push! Bet returned!"
         color = 0xffa500
     
-    embed = discord.Embed(title="🃏 Blackjack Result", description=f"Your hand: {player} = {psum}\nDealer hand: {dealer} = {dsum}\n\n{result}", color=color)
-    embed.add_field(name="New Balance", value=f"{get_balance(ctx.author.id):,} petals", inline=False)
-    await ctx.send(embed=embed)
+    final_embed = discord.Embed(title="🃏 Blackjack Result", description=f"Your hand: {player} = {psum}\nDealer hand: {dealer} = {dsum}\n\n{result}", color=color)
+    final_embed.add_field(name="New Balance", value=f"{get_balance(ctx.author.id):,} petals", inline=False)
+    await ctx.send(embed=final_embed)
 
 @bot.command()
 async def rps(ctx, choice: str, bet: int):
@@ -2454,7 +2440,6 @@ async def petshop(ctx, page: int = 1):
 
 @bot.command()
 async def inventory(ctx, member: discord.Member = None):
-    """View and use items from your inventory with buttons"""
     target = member or ctx.author
     
     inv = get_inventory(target.id)
@@ -2471,87 +2456,6 @@ async def inventory(ctx, member: discord.Member = None):
     view = InventoryView(ctx, target)
     embed = view.create_inventory_embed()
     await ctx.send(embed=embed, view=view)
-
-@bot.command()
-async def use(ctx, *, item: str):
-    """Use an item from your inventory (or use buttons in inventory)"""
-    item_id = None
-    for key, value in shop_items.items():
-        if value['name'].lower() == item.lower():
-            item_id = key
-            break
-    
-    if not item_id:
-        available = ", ".join([f"`{v['name']}`" for v in shop_items.values()])
-        await ctx.send(f"❌ Item '{item}' not found!\n\nAvailable items: {available}\n\n💡 Tip: Use `b!inventory` to see your items with buttons!")
-        return
-    
-    if not has_item(ctx.author.id, item_id):
-        await ctx.send(f"❌ You don't have {shop_items[item_id]['emoji']} {shop_items[item_id]['name']}!")
-        await ctx.send(f"Type `b!shop` to buy items or `b!inventory` to see what you own.")
-        return
-    
-    if item_id == "mystery_box":
-        reward = random.choice([500, 1000, 2500, 5000, 10000, 25000])
-        update_balance(ctx.author.id, reward)
-        remove_from_inventory(ctx.author.id, item_id)
-        embed = discord.Embed(title="🎁 Mystery Box Opened!", description=f"You found {reward:,} petals!", color=0x00ff00)
-        await ctx.send(embed=embed)
-    
-    elif item_id == "lucky_charm":
-        expiry = datetime.now() + timedelta(hours=24)
-        if ctx.author.id not in player_buffs:
-            player_buffs[ctx.author.id] = {}
-        player_buffs[ctx.author.id]['luck'] = True
-        player_buffs[ctx.author.id]['luck_expiry'] = expiry
-        remove_from_inventory(ctx.author.id, item_id)
-        embed = discord.Embed(title="🍀 Lucky Charm Activated!", description="+5% better luck in games for 24 hours!", color=0x00ff00)
-        embed.add_field(name="Expires", value=f"<t:{int(expiry.timestamp())}:R>", inline=False)
-        await ctx.send(embed=embed)
-    
-    elif item_id == "xp_boost":
-        expiry = datetime.now() + timedelta(hours=24)
-        if ctx.author.id not in player_buffs:
-            player_buffs[ctx.author.id] = {}
-        player_buffs[ctx.author.id]['xp_boost'] = True
-        player_buffs[ctx.author.id]['xp_boost_expiry'] = expiry
-        remove_from_inventory(ctx.author.id, item_id)
-        embed = discord.Embed(title="⚡ XP Boost Activated!", description="Daily rewards doubled for 24 hours!", color=0x00ff00)
-        embed.add_field(name="Expires", value=f"<t:{int(expiry.timestamp())}:R>", inline=False)
-        await ctx.send(embed=embed)
-    
-    elif item_id == "protection_amulet":
-        if ctx.author.id not in player_buffs:
-            player_buffs[ctx.author.id] = {}
-        player_buffs[ctx.author.id]['protection'] = player_buffs[ctx.author.id].get('protection', 0) + 1
-        remove_from_inventory(ctx.author.id, item_id)
-        total = player_buffs[ctx.author.id]['protection']
-        embed = discord.Embed(title="🛡️ Protection Amulet Activated!", description=f"Protected from next {total} loss(es)!", color=0x00ff00)
-        await ctx.send(embed=embed)
-    
-    elif item_id == "double_win":
-        if ctx.author.id not in player_buffs:
-            player_buffs[ctx.author.id] = {}
-        player_buffs[ctx.author.id]['double_win'] = player_buffs[ctx.author.id].get('double_win', 0) + 1
-        remove_from_inventory(ctx.author.id, item_id)
-        total = player_buffs[ctx.author.id]['double_win']
-        embed = discord.Embed(title="🎰 Double Win Token Activated!", description=f"Next {total} win(s) will be doubled!", color=0x00ff00)
-        await ctx.send(embed=embed)
-    
-    elif item_id == "bank_vault":
-        if ctx.author.id not in player_permanents:
-            player_permanents[ctx.author.id] = {}
-        player_permanents[ctx.author.id]['bank_vault'] = True
-        remove_from_inventory(ctx.author.id, item_id)
-        embed = discord.Embed(title="🏦 Bank Vault Unlocked!", description="Daily gift limit increased to 1,500,000 petals!", color=0x00ff00)
-        await ctx.send(embed=embed)
-    
-    else:
-        remove_from_inventory(ctx.author.id, item_id)
-        embed = discord.Embed(title=f"{shop_items[item_id]['emoji']} Item Used!", description=f"You used {shop_items[item_id]['name']}!", color=0xff69b4)
-        await ctx.send(embed=embed)
-    
-    save_all_data()
 
 @bot.command()
 async def buffs(ctx):
@@ -2711,115 +2615,40 @@ async def pet(ctx, action: str = None, *, name: str = None):
         leveled = False
         while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
             pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
-            pet["level leveled = False
-        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
-            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
             pet["level"] += 1
-           "]:
-            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
-            pet["level"] += 1
-            leveled = True
-        
-"] += 1
             leveled = True
         
         save_all_data()
         
-        msg = f"🍖 You fed {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: leveled = True
-        
-        save_all_data()
-        
-        msg = f"🍖 You fed {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness:        save_all_data()
-        
-        msg = f"🍖 You fed {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old {old_happiness}% → {pet['happiness']}% (+50 XP)"
-        if leveled:
-            msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
-        await ctx.send(msg)
-    
-    elif action.lower() == "play":
-        pet_id = pet_equipped {old_happiness}% → {pet['happiness']}% (+50 XP)"
-        if leveled:
-            msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
-        await ctx.send(msg)
-    
-    elif action.lower() == "play":
-        pet_id = pet_equipped[uid_happiness}% → {pet['happiness']}% (+50 XP)"
+        msg = f"🍖 You fed {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness}% → {pet['happiness']}% (+50 XP)"
         if leveled:
             msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
         await ctx.send(msg)
     
     elif action.lower() == "play":
         pet_id = pet_equipped[uid]
-        pet = player_p[uid]
         pet = player_pets[uid][pet_id]
-        pet_data = pet_shop_items[pet_id]
-        
-        on_cd]
-        pet = player_pets[uid][pet_id]
-        pet_data = pet_shop_items[pet_id]
-        
-        on_cdets[uid][pet_id]
         pet_data = pet_shop_items[pet_id]
         
         on_cd, remaining = check_cooldown(pet_play_cooldown, uid, 3600)
         if on_cd:
-            await ctx.send(f"⏰ Your pet, remaining = check_cooldown(pet_play_cooldown, uid, 3600)
-        if on_cd:
-            await ctx.send(f"⏰ Your pet, remaining = check_cooldown(pet_play_cooldown, uid, 3600)
-        if on_cd:
-            await ctx.send(f"⏰ Your pet is tired! Come back in {format_time( is tired! Come back in {format_time(remaining)}")
+            await ctx.send(f"⏰ Your pet is tired! Come back in {format_time(remaining)}")
             return
         
         old_happiness = pet["happiness"]
         pet["happiness"] = min(100, pet["happiness"] + 15)
         pet["xp"] += 75
-        set_cooldown(pet_play_coold is tired! Come back in {format_time(remaining)}")
-            return
-        
-        old_happiness = pet["happiness"]
-        pet["happiness"] = min(100, pet["happiness"] + 15)
-        pet["xp"] += 75
-        set_cooldown(pet_play_cooldremaining)}")
-            return
-        
-        old_happiness = pet["happiness"]
-        pet["happiness"] = min(100, pet["happiness"] + 15)
-        pet["xp"] += 75
-        set_cooldown(pet_playown, uid)
+        set_cooldown(pet_play_cooldown, uid)
         
         leveled = False
-        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_levelown, uid)
-        
-        leveled = False
-        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["_cooldown, uid)
-        
-        leveled = False
-        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet"]:
+        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
             pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
             pet["level"] += 1
             leveled = True
         
         save_all_data()
         
-        msg = fmax_level"]:
-            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
-            pet["level"] += 1
-            leveled = True
-        
-        save_all_data()
-        
-        msg = f"🎾 You_data["max_level"]:
-            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
-            pet["level"] += 1
-            leveled = True
-        
-        save_all_data()
-        
-        msg = f"🎾 You played with"🎾 You played with {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness} played with {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness}% → {pet['happiness']}% (+75 XP)"
-        if leveled:
-            msg += f"\n🎉 LEVEL UP {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness}% → {pet['happiness']}% (+75 XP)"
-        if leveled:
-            msg += f"\n🎉 LEVEL UP% → {pet['happiness']}% (+75 XP)"
+        msg = f"🎾 You played with {pet_data['emoji']} {pet.get('name', pet_data['name'])}! Happiness: {old_happiness}% → {pet['happiness']}% (+75 XP)"
         if leveled:
             msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
         await ctx.send(msg)
@@ -2829,93 +2658,27 @@ async def pet(ctx, action: str = None, *, name: str = None):
         pet = player_pets[uid][pet_id]
         pet_data = pet_shop_items[pet_id]
         
-        on_cd, remaining =! Your pet reached level {pet['level']}! 🎉"
-        await ctx.send(msg)
-    
-    elif action.lower() == "collect":
-        pet_id = pet_equipped[uid]
-        pet = player_pets[uid][pet_id]
-        pet_data = pet_shop_items[pet_id]
-        
-        on_cd, remaining =! Your pet reached level {pet['level']}! 🎉"
-        await ctx.send(msg)
-    
-    elif action.lower() == "collect":
-        pet_id = pet_equipped[uid]
-        pet = player_pets[uid][pet_id]
-        pet_data = pet_shop_items[pet_id]
-        
-        on_cd, remaining = check_cooldown(pet_cooldown, check_cooldown(pet_cooldown, check_cooldown(pet_cooldown, uid)
+        on_cd, remaining = check_cooldown(pet_cooldown, uid)
         if on_cd:
             await ctx.send(f"⏰ Come back tomorrow! ({format_time(remaining)})")
             return
         
-        reward = pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) uid)
-        if on_cd:
-            await ctx.send(f"⏰ Come back tomorrow! ({format_time(remaining)})")
-            return
-        
-        reward = pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] /  uid)
-        if on_cd:
-            await ctx.send(f"⏰ Come back tomorrow! ({format_time(remaining)})")
-            return
-        
-        reward = pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] + int(pet_data['daily_reward']100)) + int(pet_data['daily_reward'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200))
+        reward = pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200))
         update_balance(uid, reward)
         pet["xp"] += 25
         set_cooldown(pet_cooldown, uid)
         
         leveled = False
-        while * (pet['happiness'] / 200))
-        update_balance(uid, reward)
-        pet["xp"] += 25
-        set_cooldown(pet_cooldown, uid)
-        
-        leveled = False
-        while pet["xp"] >= pet * (pet['happiness'] / 200))
-        update_balance(uid, reward)
-        pet["xp"] += 25
-        set_cooldown(pet_cooldown, uid)
-        
-        leveled = False
- pet["xp"] >= pet_data['xp_per_level'] * pet_data['xp_per_level'] * pet        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
-            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
-            pet["level"] += 1
-            leveled = True
-        
-        save["level"] and pet["level"] < pet_data["max_level"]:
-            pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
-            pet["level"] += 1
-            leveled = True
-        
-        save["level"] and pet["level"] < pet_data["max_level"]:
+        while pet["xp"] >= pet_data['xp_per_level'] * pet["level"] and pet["level"] < pet_data["max_level"]:
             pet["xp"] -= pet_data['xp_per_level'] * pet["level"]
             pet["level"] += 1
             leveled = True
         
         save_all_data()
         
-        msg = f"💰_all_data()
-        
-        msg = f"💰_all_data()
-        
-        msg = f"💰 {pet_data['emoji']} {pet.get('name', pet_data['name'])} gave you {reward:,} {pet_data['emoji']} {pet.get('name', pet_data['name'])} gave you {reward:,} {pet_data['emoji']} {pet.get('name', pet_data['name'])} gave you {reward:,} petals! (+25 XP)"
-        if leveled:
-            msg += f"\n🎉 LEVEL UP! Your pet reached level {pet[' petals! (+25 XP)"
-        if leveled:
-            msg += f"\n🎉 LEVEL UP! Your pet reached level {pet[' petals! (+25 XP)"
+        msg = f"💰 {pet_data['emoji']} {pet.get('name', pet_data['name'])} gave you {reward:,} petals! (+25 XP)"
         if leveled:
             msg += f"\n🎉 LEVEL UP! Your pet reached level {pet['level']}! 🎉"
-        await ctx.send(msg)
-    
-    elif action.lower() == "rename":
-        if not name:
-            await ctx.send("❌ Please provide a new name! Example: `b!pet rename Fluffylevel']}! 🎉"
-        await ctx.send(msg)
-    
-    elif action.lower() == "rename":
-        if not name:
-            await ctx.send("❌ Please provide a new name! Example: `b!pet renamelevel']}! 🎉"
         await ctx.send(msg)
     
     elif action.lower() == "rename":
@@ -2927,50 +2690,12 @@ async def pet(ctx, action: str = None, *, name: str = None):
             return
         
         pet_id = pet_equipped[uid]
-        old Fluffy`")
-            return
-        if len(name) > 20:
-            await ctx.send("❌ Name too long! Max 20 characters.")
-            return
-        
-        pet_id = pet_equipped[uid]
-        old_name =`")
-            return
-        if len(name) > 20:
-            await ctx.send("❌ Name too long! Max 20 characters.")
-            return
-        
-        pet_id = pet_equipped[uid]
-        old_name = player_p_name = player_pets[uid][pet_id].get('name', pet_shop_items[pet_id]['name'])
-        player_pets player_pets[uid][pet_id].get('name', pet_shop_items[pet_id]['name'])
+        old_name = player_pets[uid][pet_id].get('name', pet_shop_items[pet_id]['name'])
         player_pets[uid][pet_id]['name'] = name
-        save_all_data()
-        await ctx.send(f"✅ Your pet {old_name} is now named **ets[uid][pet_id].get('name', pet_shop_items[pet_id]['name'])
-        player_pets[uid][pet_id]['name'] = name
-        save_all_data()
-        await ctx.send(f"✅ Your pet {old_name} is now named **[uid][pet_id]['name'] = name
         save_all_data()
         await ctx.send(f"✅ Your pet {old_name} is now named **{name}**!")
     
-    elif action.lower() =={name}**!")
-    
     elif action.lower() == "equip":
-        if not name:
-            await ctx.send("❌ Please provide a pet name! Example: `b!pet equip \"Garden Cat\"`")
-            return
-        
-        found = None
-        for pid, pet in player_pets[uid].items():
-            pet_data ={name}**!")
-    
-    elif action.lower() == "equip":
-        if not name:
-            await ctx.send("❌ Please provide a pet name! Example: `b!pet equip \"Garden Cat\"`")
-            return
-        
-        found = None
-        for pid, pet in player_pets[uid].items():
-            pet_data = "equip":
         if not name:
             await ctx.send("❌ Please provide a pet name! Example: `b!pet equip \"Garden Cat\"`")
             return
@@ -2980,46 +2705,13 @@ async def pet(ctx, action: str = None, *, name: str = None):
             pet_data = pet_shop_items[pid]
             if pet.get('name', pet_data['name']).lower() == name.lower():
                 found = pid
-                pet_shop_items[pid]
-            if pet.get('name', pet_data['name']).lower() == name.lower():
-                found = pid
-                pet_shop_items[pid]
-            if pet.get('name', pet_data['name']).lower() == name.lower():
-                found = pid
                 break
         
         if found:
             pet_equipped[uid] = found
             save_all_data()
             pet_data = pet_shop_items[found]
-            await ctx.send(f break
-        
-        if found:
-            pet_equipped[uid] = found
-            save_all_data()
-            pet_data = pet_shop_items[found]
-            await ctx break
-        
-        if found:
-            pet_equipped[uid] = found
-            save_all_data()
-            pet_data = pet_shop_items[found]
-            await ctx.send(f"✅ Equipped {pet"✅ Equipped {pet_data['emoji']} {pet_data['name']} as your active pet!")
-        else:
-            await ctx.send(f".send(f"✅ Equipped {pet_data['emoji']} {pet_data['name']} as your active pet!")
-        else:
-            await ctx.send(f"❌ Could not find a pet named '{name}'!")
-    
-    else:
-        await ctx.send("❌ Invalid action! Use: `feed`, `play`, `collect`, `rename`, or `equip`")
-
-@❌ Could not find a pet named '{name}'!")
-    
-    else:
-        await ctx.send("❌ Invalid action! Use: `feed`, `play`, `collect`, `rename`, or `equip`")
-
-@bot.command()
-async def pet_data['emoji']} {pet_data['name']} as your active pet!")
+            await ctx.send(f"✅ Equipped {pet_data['emoji']} {pet_data['name']} as your active pet!")
         else:
             await ctx.send(f"❌ Could not find a pet named '{name}'!")
     
@@ -3027,37 +2719,15 @@ async def pet_data['emoji']} {pet_data['name']} as your active pet!")
         await ctx.send("❌ Invalid action! Use: `feed`, `play`, `collect`, `rename`, or `equip`")
 
 @bot.command()
-asyncbot.command()
 async def petstats(ctx, member: discord.Member = None):
     target = member or ctx.author
     uid = target.id
     
-    if uidstats(ctx, member: discord.Member = None):
-    target = member or ctx.author
-    uid = target.id
-    
     if uid not in player_pets or not player_pets[uid]:
-        await ctx.send(f"❌ {target.name} doesn't have any pets!")
-        return
-    
-    if uid not in pet def petstats(ctx, member: discord.Member = None):
-    target = member or ctx.author
-    uid = target.id
-    
-    if uid not in player_pets or not player_pets[uid]:
-        await ctx.send(f"❌ {target.name} doesn't have any pets!")
-        return
-    
-    if uid not in not in player_pets or not player_pets[uid]:
         await ctx.send(f"❌ {target.name} doesn't have any pets!")
         return
     
     if uid not in pet_equipped:
-        pet_equ_equipped:
-        pet_equipped[uid] = list(player_pets[uid].keys())[0]
-        save_all_data()
-    
-    pet_id pet_equipped:
         pet_equipped[uid] = list(player_pets[uid].keys())[0]
         save_all_data()
     
@@ -3065,79 +2735,25 @@ async def petstats(ctx, member: discord.Member = None):
     pet = player_pets[uid][pet_id]
     pet_data = pet_shop_items[pet_id]
     
-    happiness = "❤️"ipped[uid] = list(player_pets[uid].keys())[0]
-        save_all_data()
-    
-    pet_id = pet_equipped[uid]
-    pet = player_pets[uid][pet_id]
-    pet_data = pet_shop_items[pet_id]
-    
-    happiness = = pet_equipped[uid]
-    pet = player_pets[uid][pet_id]
-    pet_data = pet_shop_items[pet_id]
-    
-    happiness = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet[" * (pet["happiness"] // 10) + "🖤" * (10 - ( "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (happiness"] // 10))
-    xp_needed = pet_data['xp_per_level'] * pet['level']
-    xp_bar = "🟢" * int((pet["xp"] / xp_needed) * 20) + "pet["happiness"] // 10))
+    happiness = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet["happiness"] // 10))
     xp_needed = pet_data['xp_per_level'] * pet['level']
     xp_bar = "🟢" * int((pet["xp"] / xp_needed) * 20) + "⚫" * (20 - int((pet["xp"] / xp_needed) * 20)) if xp_needed > 0 else "🟢" * 20
     
-    embed = discord.Embed(title=f"🐾 {target.name}'pet["happiness"] // 10))
-    xp_needed = pet_data['xp_per_level'] * pet['level']
-    xp_bar = "🟢" * int((pet["xp"] / xp_needed) * 20) + "⚫" * (20 - int((pet["xp"] / xp_needed) * 20)) if xp_needed > 0 else "🟢" * 20
-    
-    embed = discord.Embed(title=f"🐾 {target⚫" * (20 - int((pet["xp"] / xp_needed) * 20)) if xp_needed > 0 else "🟢" * 20
-    
-    embed = discord.Embed(title=f"🐾 {target.name}'s Pet", description=f"{pet_data['emoji']} **{pet.get('name', pet_data['name'])}** [{pet_data['rarity'].title().name}'s Pet", description=f"{pet_data['emoji']} **{pet.get('name', pet_data['name'])}** [{pet_data['rarity'].title()s Pet", description=f"{pet_data['emoji']} **{pet.get('name', pet_data['name'])}** [{pet_data['rarity'].title()}]", color=0xff69b4)
-    embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP}]", color=0xff69b4)
-    embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP}]", color=0xff69b4)
-    embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{xp_ne:** {pet['xp']:,}/{xp_needed:,:** {pet['xp']:,}/{xp_needed:,}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['eded:,}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_re}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200ward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals", inline=False)
-    await ctx.send} petals", inline=False)
-    await ctx.send)):,} petals", inline=False)
+    embed = discord.Embed(title=f"🐾 {target.name}'s Pet", description=f"{pet_data['emoji']} **{pet.get('name', pet_data['name'])}** [{pet_data['rarity'].title()}]", color=0xff69b4)
+    embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{xp_needed:,}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals", inline=False)
     await ctx.send(embed=embed)
 
 # Duel Command
 @bot.command()
-async def duel(ctx(embed=embed)
-
-# Duel Command
-@bot.command()
-async def duel(ctx, opponent: discord.Member, bet: int):
-    if opponent == ctx.author:
-        await ctx.send("❌ You can't duel yourself!")
-        return
-    if bet(embed=embed)
-
-# Duel Command
-@bot.command()
 async def duel(ctx, opponent: discord.Member, bet: int):
     if opponent == ctx.author:
         await ctx.send("❌ You can't duel yourself!")
         return
     if bet < 50:
-       , opponent: discord.Member, bet: int):
-    if opponent == ctx.author:
-        await ctx.send("❌ You can't duel yourself!")
-        return
-    if bet < 50:
-        await ctx.send(" < 50:
-        await ctx.send("❌ await ctx.send("❌ Minimum bet is 50 petals!")
+        await ctx.send("❌ Minimum bet is 50 petals!")
         return
     if get_balance(ctx.author.id) < bet:
         await ctx.send(f"❌ You need {bet} petals!")
-        return
-    
-    embed = discord.Embed(title="⚔️ Duel Challenge!", description=f"{ctx.author.mention} challenges❌ Minimum bet is 50 petals!")
-        return
-    if get_balance(ctx.author.id) < bet:
-        await Minimum bet is 50 petals!")
-        return
-    if get_balance(ctx.author.id) < bet:
-        await ctx.send(f"❌ You need {bet} petals!")
-        return
-    
-    embed = discord.Embed(title="⚔️ Duel Challenge!", description=f"{ctx.author.mention} challenges {opponent.mention} to a duel for {bet} petals!\n\n{opponent.mention}, do you accept?", color=0xffa500)
-    await ctx.send(embed=embed ctx.send(f"❌ You need {bet} petals!")
         return
     
     embed = discord.Embed(title="⚔️ Duel Challenge!", description=f"{ctx.author.mention} challenges {opponent.mention} to a duel for {bet} petals!\n\n{opponent.mention}, do you accept?", color=0xffa500)
@@ -3146,72 +2762,23 @@ async def duel(ctx, opponent: discord.Member, bet: int):
 # Redeem Command
 @bot.command()
 async def redeem(ctx):
-    embed = discord.Embed(title="🎟️ Redeem {opponent.mention} to a duel for {bet} petals!\n\n{opponent.mention}, do you accept?", color=0xffa500)
-    await ctx.send(embed=embed, view=DuelView(ctx, opponent, bet))
-
-# Redeem Command
-@bot.command()
-async def redeem(ctx):
-    embed = discord.Embed(title="🎟️ Redeem Code", description="Click the button below to redeem, view=DuelView(ctx, opponent, bet))
-
-# Redeem Command
-@bot.command()
-async def redeem(ctx):
-    embed = discord.Embed(title="🎟️ Redeem Code", description="Click the button below to redeem a voucher Code", description="Click the button below to redeem a voucher code!", color=0xff69b4)
-    await ctx.send(embed=embed, view=RedeemButtonView())
-
- a voucher code!", color=0xff69b4)
+    embed = discord.Embed(title="🎟️ Redeem Code", description="Click the button below to redeem a voucher code!", color=0xff69b4)
     await ctx.send(embed=embed, view=RedeemButtonView())
 
 # Admin Commands
-@bot.command()
-async def gen(ctx, code: str, value: int, uses: int):
-    if ctx.author.name not in ADMINS:
-        await ctx code!", color=0xff69b4)
-    await ctx.send(embed=embed, view=RedeemButtonView())
-
-# Admin Commands
-@bot.command()
-async def gen(ctx, code: str, value: int, uses: int):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌# Admin Commands
 @bot.command()
 async def gen(ctx, code: str, value: int, uses: int):
     if ctx.author.name not in ADMINS:
         await ctx.send("❌ No permission!")
-        return
-    redeem_codes[code.send("❌ No permission!")
-        return
-    redeem_codes No permission!")
         return
     redeem_codes[code.upper()] = {"value": value, "uses": uses}
     save_all_data()
-    await ctx.send(f".upper()] = {"value": value, "uses": uses}
-    save_all_data()
-    await ctx.send(f"[code.upper()] = {"value": value, "uses": uses}
-    save_all_data()
-    await ctx.send✅ Generated code `{code.upper()}` worth {value} petals ({uses} uses)")
-
-@bot.command()
-async def give(ctx, member: discord.Member, amount: int):
-    if ctx.author.name not✅ Generated code `{code.upper()}` worth {value} petals ({uses} uses)")
-
-@bot.command()
-async def give(ctx, member: discord.Member, amount: int):
-    if ctx.author.name not in ADMINS(f"✅ Generated code `{code.upper()}` worth {value} petals ({uses} uses)")
+    await ctx.send(f"✅ Generated code `{code.upper()}` worth {value} petals ({uses} uses)")
 
 @bot.command()
 async def give(ctx, member: discord.Member, amount: int):
     if ctx.author.name not in ADMINS:
-        in ADMINS:
         await ctx.send("❌ No permission!")
-        return
-    update_balance(member.id, amount)
-    await ctx.send(f"✅ Gave {amount} petals to {member:
-        await ctx.send("❌ No permission!")
-        return
-    update_balance(member.id, amount)
-    await ctx.send(f" await ctx.send("❌ No permission!")
         return
     update_balance(member.id, amount)
     await ctx.send(f"✅ Gave {amount} petals to {member.mention}")
@@ -3220,47 +2787,13 @@ async def give(ctx, member: discord.Member, amount: int):
 async def reset_cooldowns(ctx, member: discord.Member = None):
     if ctx.author.name not in ADMINS:
         await ctx.send("❌ No permission!")
-       .mention}")
-
-@bot.command()
-async def reset_cooldowns(ctx, member: discord.Member = None):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
         return
-    target = member or ctx✅ Gave {amount} petals to {member.mention}")
-
-@bot.command()
-async def reset_cooldowns(ctx, member: discord.Member = None):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    target return
     target = member or ctx.author
     for cd in [beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown, daily_cooldown, weekly_cooldown, hourly_cooldown, pet_cooldown]:
         if target.id in cd:
             del cd[target.id]
-    save_all.author
-    for cd in [beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown, daily_cooldown, weekly_cooldown, hourly_cooldown, pet_cooldown]:
-        if target.id in cd:
-            del cd[target.id]
     save_all_data()
- = member or ctx.author
-    for cd in [beg_cooldown, farm_cooldown, hunt_cooldown, work_cooldown, daily_cooldown, weekly_cooldown, hourly_cooldown, pet_cooldown]:
-        if target.id in cd:
-            del cd[target.id]
-    save_all_data()
-    await_data()
-    await ctx.send(f"✅ Reset all cooldowns    await ctx.send(f"✅ Reset all cooldowns for { ctx.send(f"✅ Reset all cooldowns for {target.mention}")
-
-@bot.command()
-async def add_item(ctx, member: discord.Member, item: str for {target.mention}")
-
-@bot.command()
-async def add_item(ctx, member: discord.Member, item: str, qty: int = 1):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    item_id = Nonetarget.mention}")
+    await ctx.send(f"✅ Reset all cooldowns for {target.mention}")
 
 @bot.command()
 async def add_item(ctx, member: discord.Member, item: str, qty: int = 1):
@@ -3268,58 +2801,23 @@ async def add_item(ctx, member: discord.Member, item: str, qty: int = 1):
         await ctx.send("❌ No permission!")
         return
     item_id = None
-   , qty: int = 1):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    item_id = None
     for key, val in shop_items.items():
-        if val
-    for key, val in shop_items.items():
-        if val for key, val in shop_items.items():
         if val['name'].lower() == item.lower():
             item_id = key
             break
     if not item_id:
-        await ctx.send(f"❌ Item '{item}' not found['name'].lower() == item.lower():
-            item_id = key
-            break
-    if not item_id:
         await ctx.send(f"❌ Item '{item}' not found!")
-        return
-    add_to_inventory(member.id, item_id, qty)
-    await ctx.send(f"✅ Added {qty}x {shop_items[item_id]['name']['name'].lower() == item.lower():
-            item_id = key
-            break
-    if not item_id:
-        await ctx.send(f"❌ Item '{item}' not found!")
-        return
-    add_to_inventory(member.id, item_id, qty)
-    await ctx.send(f"✅ Added {qty}x {shop_items[item_id]['!")
         return
     add_to_inventory(member.id, item_id, qty)
     await ctx.send(f"✅ Added {qty}x {shop_items[item_id]['name']} to {member.mention}")
 
 @bot.command()
 async def add_pet(ctx, member: discord.Member, pet_name: str):
-    if ctx.author.name not} to {member.mention}")
-
-@bot.command()
-async def add_pet(ctx, member: discord.Member, pet_name: str):
-    if ctx.authorname']} to {member.mention}")
-
-@bot.command()
-async def add_pet(ctx, member: discord.Member, pet_name: str):
     if ctx.author.name not in ADMINS:
         await ctx.send("❌ No permission!")
         return
     pet_id = None
     for key, val in pet_shop_items.items():
-        if val['name'].lower() == pet in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    pet_id = None
-    for key, val in pet_shop_items.items():
         if val['name'].lower() == pet_name.lower():
             pet_id = key
             break
@@ -3330,48 +2828,7 @@ async def add_pet(ctx, member: discord.Member, pet_name: str):
     if member.id not in player_pets:
         player_pets[member.id] = {}
     player_pets[member.id][pet_id] = {
-        "name": pet_shop_items[pet.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    pet_id = None
-    for key, val in pet_shop_items.items():
-        if val['name'].lower() == pet_name.lower():
-            pet_id = key
-            break
-    if not pet_id:
-        await ctx.send(f"❌ Pet '{pet_name}' not found!")
-        return
-    
-    if member.id not in player_pets:
-        player_pets[member.id] = {}
-    player_pets[member.id][pet_id] = {
-        "name": pet_shop_items_name.lower():
-            pet_id = key
-            break
-    if not pet_id:
-        await ctx.send(f"❌ Pet '{pet_name}' not found!")
-        return
-    
-    if member.id not in player_pets:
-        player_pets[member.id] = {}
-    player_pets[member.id][pet_id] = {
-        "name": pet_shop_items_id]['name'],
-        "level": 1,
-        "xp": 0,
-        "happiness": 100,
-        "last_fed": datetime.now(),
-        "last_played": datetime.now()
-    }
-    save_all_data()
-    await ctx.send(f"✅ Added pet[pet_id]['name'],
-        "level": 1,
-        "xp": 0,
-        "happiness": 100,
-        "last_fed": datetime.now(),
-        "last_played": datetime.now()
-    }
-    save_all_data()
-    await ctx.send(f"✅[pet_id]['name'],
+        "name": pet_shop_items[pet_id]['name'],
         "level": 1,
         "xp": 0,
         "happiness": 100,
@@ -3382,22 +2839,7 @@ async def add_pet(ctx, member: discord.Member, pet_name: str):
     await ctx.send(f"✅ Added pet {pet_shop_items[pet_id]['name']} to {member.mention}")
 
 @bot.command()
-async def remove_pet(ctx, {pet_shop_items[pet_id]['name']} to {member.mention}")
-
-@bot.command()
-async def remove_pet(ctx, member: Added pet {pet_shop_items[pet_id]['name']} to {member.mention}")
-
-@bot.command()
-async def remove_pet member: discord.Member, pet_name: str):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    discord.Member, pet_name: str):
-    if ctx.author.name not in ADMINS:
-        await ctx.send("❌ No permission!")
-        return
-    pet_id = None
-    for key, val in pet_shop_items.items(ctx, member: discord.Member, pet_name: str):
+async def remove_pet(ctx, member: discord.Member, pet_name: str):
     if ctx.author.name not in ADMINS:
         await ctx.send("❌ No permission!")
         return
@@ -3408,48 +2850,13 @@ async def remove_pet member: discord.Member, pet_name: str):
             break
     if not pet_id:
         await ctx.send(f"❌ Pet '{pet_name}' not found!")
-        return
-    
-    if member.id in player_pets and pet_id in player_pets[member.id]:
-        pet_id = None
-    for key, val in pet_shop_items.items():
-        if val['name'].lower() == pet_name.lower():
-            pet_id = key
-            break
-    if not pet_id:
-       ():
-        if val['name'].lower() == pet_name.lower():
-            pet_id = key
-            break
-    if not pet_id:
-        await ctx.send(f"❌ Pet '{pet_name}' not found!")
-        return
-    
-    if member.id in player_pets and pet_id in player_pets[member.id]:
-        del player_pets[member del player_pets[member.id][pet_id]
-        if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
-            del pet_equipped await ctx.send(f"❌ Pet '{pet_name}' not found!")
         return
     
     if member.id in player_pets and pet_id in player_pets[member.id]:
         del player_pets[member.id][pet_id]
         if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
-            del pet_equipped.id][pet_id]
-        if member.id in pet_equipped and pet_equipped[member.id] == pet_id:
             del pet_equipped[member.id]
-       [member.id]
         save_all_data()
-        await ctx.send(f"✅ Removed pet {pet_name} from {member.mention}")
-    else:
-        await ctx.send(f"❌ {member.mention} doesn't own that pet!")
-
-@[member.id]
-        save_all_data()
-        await ctx.send(f"✅ Removed pet {pet_name} from {member.mention}")
-    else:
-        await ctx.send(f"❌ {member.mention} doesn't own that pet!")
-
-@ save_all_data()
         await ctx.send(f"✅ Removed pet {pet_name} from {member.mention}")
     else:
         await ctx.send(f"❌ {member.mention} doesn't own that pet!")
@@ -3461,53 +2868,13 @@ async def setup(ctx):
         return
     server_channels[ctx.guild.id] = ctx.channel.id
     save_all_data()
-    await ctx.send(f"✅ Leaderboard channel set to {ctx.channelbot.command()
-async def setup(ctx):
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Admin only!")
-        return
-    server_channels[ctx.guild.id] = ctx.channel.id
-    save_all_data()
-    await ctx.send(f"✅ Leaderboard channel set to {ctx.channelbot.command()
-async def setup(ctx):
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Admin only!")
-        return
-    server_channels[ctx.guild.id] = ctx.channel.id
-    save_all_data()
-    await ctx.send(f"✅ Leaderboard channel set to {ctx.mention}")
+    await ctx.send(f"✅ Leaderboard channel set to {ctx.channel.mention}")
 
 @bot.command()
 @commands.is_owner()
 async def add_admin(ctx, username: str):
     if username not in ADMINS:
         ADMINS.append(username)
-        await.mention}")
-
-@bot.command()
-@commands.is_owner()
-async def add_admin(ctx, username: str):
-    if username not in ADMINS:
-        ADMINS.append.channel.mention}")
-
-@bot.command()
-@commands.is_owner()
-async def add_admin(ctx, username: str):
-    if username not in ADMINS:
-        ADMINS.append(username)
-        await ctx.send(f"✅ Added {username} as admin!")
-
-@bot.command()
-async def admins(ctx):
-    await ctx.send(f"👑 Admins: {', '.join(ADMINS)}")
-
-# Auto-save ctx.send(f"✅ Added {username} as admin!")
-
-@bot.command()
-async def admins(ctx):
-    await ctx.send(f"👑 Admins: {', '.join(ADMINS)}")
-
-# Auto-save and leader(username)
         await ctx.send(f"✅ Added {username} as admin!")
 
 @bot.command()
@@ -3521,96 +2888,30 @@ async def auto_save():
         save_all_data()
         print("💾 Auto-saved all data!")
 
-@ and leaderboard tasks
-async def auto_save():
-    while True:
-        await asyncio.sleep(60)
-        save_all_data()
-        print("💾 Auto-saved all data!")
-
-@tasks.lboard tasks
-async def auto_save():
-    while True:
-        await asyncio.sleep(60)
-        save_all_data()
-        print("💾 Auto-saved all data!")
-
-@tasks.ltasks.loop(hours=1)
+@tasks.loop(hours=1)
 async def hourly_leaderboard():
     for gid, cid in server_channels.items():
         channel = bot.get_channel(cid)
         if channel and economy:
-            top = sorted(economy.items(), key=lambdaoop(hours=1)
-async def hourly_leaderboard():
-    for gid, cid in server_channels.items():
-        channel = bot.get_channel(cid)
-        if channel and economy:
-            top = sorted(economy.items(), key=lambda xoop(hours=1)
-async def hourly_leaderboard():
-    for gid, cid in server_channels.items():
-        channel = bot.get_channel(cid)
-        if channel and economy:
-            top = sorted(economy.items(), key=lambda x: x[1], reverse=True x: x[1],: x[1], reverse=True)[:5]
-            if top:
-                desc = ""
-                for i, (uid, bal) in enumerate(top, 1):
-)[:5]
+            top = sorted(economy.items(), key=lambda x: x[1], reverse=True)[:5]
             if top:
                 desc = ""
                 for i, (uid, bal) in enumerate(top, 1):
                     medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
-                    user = await bot.fetch_user reverse=True)[:5]
-            if top:
-                desc = ""
-                for i, (uid, bal) in enumerate(top, 1):
-                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
-                    user =                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else "📊"
                     user = await bot.fetch_user(uid)
-                    desc += f"{medal(uid)
-                    desc += f"{medal} ** await bot.fetch_user(uid)
                     desc += f"{medal} **{i}.** {user.name} — `{bal:,}` petals\n"
-                embed = discord.Embed(title="} **{i}.** {user.name} — `{bal:,}` petals\n"
-                embed = discord.Embed(title="🏆 Hourly Leaderboard", description=desc, color=0xffb7c5)
-                await channel.send(embed=embed)
-
-@bot.event
-async def on_ready():
-    print(f'🌸 {bot.user} is online!{i}.** {user.name} — `{bal:,}` petals\n"
                 embed = discord.Embed(title="🏆 Hourly Leaderboard", description=desc, color=0xffb7c5)
                 await channel.send(embed=embed)
 
 @bot.event
 async def on_ready():
     print(f'🌸 {bot.user} is online!')
-   🏆 Hourly Leaderboard", description=desc, color=0xffb7c5)
-                await channel.send(embed=embed)
-
-@bot.event
-async def on_ready():
-    print(f'🌸 {bot.user} is online!')
     print(f'📊 Serving {len(bot.guilds)} servers')
-    print(f'💾 Database: {"MongoDB" if USE_MONGODB else')
-    print(f'📊 Serving {len(bot.guilds)} servers')
-    print(f'💾 Database: {"MongoDB" if USE_MONGOD print(f'📊 Serving {len(bot.guilds)} servers')
     print(f'💾 Database: {"MongoDB" if USE_MONGODB else "Local File"}')
     print(f'👑 Admins: {", ".join(ADMINS)}')
     bot.loop.create_task(auto_save())
     if not hourly_leaderboard.is_running():
-        hourly_ "Local File"}')
-    print(f'👑 Admins: {", ".join(ADMINS)}')
-    bot.loop.create_task(auto_save())
-    if not hourly_leaderboard.is_running():
         hourly_leaderboard.start()
-
-# Run the bot
-keepB else "Local File"}')
-    print(f'👑 Admins: {", ".join(ADMINS)}')
-    bot.loop.create_task(auto_save())
-    if not hourly_leaderboard.is_running():
-        hourly_leaderboard.start()
-
-# Run the bot
-keepleaderboard.start()
 
 # Run the bot
 keep_alive()
