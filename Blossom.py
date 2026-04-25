@@ -787,7 +787,7 @@ class ItemManagementView(View):
     async def remove_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RemoveItemModal())
     
-    @discord.ui.button(label="🗑️ Clear Inventory", style=discord.ButtonStyle.warning, emoji="🗑️", row=0)
+    @discord.ui.button(label="🗑️ Clear Inventory", style=discord.ButtonStyle.danger, emoji="🗑️", row=0)
     async def clear_inventory_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(ClearInventoryModal())
     
