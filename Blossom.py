@@ -119,11 +119,11 @@ shop_items = {
         "type": "buff"
     },
     "protection_amulet": {
-        "name": "NOT AVAILABLE",
-        "emoji": "🛡️",
-        "price": 300000000000000000000000000,
-        "description": "NOT FOR SALE",
-        "type": "consumable"
+        "name": "N/A",
+        "emoji": "N/A",
+        "price": N/A,
+        "description": "N/A",
+        "type": "N/A"
     },
     "double_win": {
         "name": "🎰 Double Win Token",
@@ -238,6 +238,37 @@ pet_shop_items = {
         "xp_per_level": 25000
     }
 }
+
+# Helper function to parse user input
+def parse_user_input(guild, user_input):
+    """Parse user input (mention, ID, or username) into a Member object"""
+    user_input = user_input.strip()
+    
+    # Check for mention
+    if user_input.startswith('<@') and user_input.endswith('>'):
+        user_id = int(user_input.strip('<@!>'))
+        return guild.get_member(user_id)
+    
+    # Check for numeric ID
+    if user_input.isdigit():
+        return guild.get_member(int(user_input))
+    
+    # Search by username (case-insensitive)
+    username_lower = user_input.lower()
+    for member in guild.members:
+        if member.name.lower() == username_lower:
+            return member
+        if member.display_name.lower() == username_lower:
+            return member
+    
+    # Search by username with discriminator (old format, e.g., "name#1234")
+    if '#' in user_input:
+        name, discrim = user_input.split('#')
+        for member in guild.members:
+            if member.name == name and member.discriminator == discrim:
+                return member
+    
+    return None
 
 # --- DATABASE FUNCTIONS ---
 def load_all_data():
@@ -667,23 +698,15 @@ class AdminPanelView(View):
 
 
 class EditBalanceModal(Modal, title="💰 Edit Player Balance"):
-    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    user_id = TextInput(label="User ID, Mention, or Username", placeholder="Paste user ID, @mention, or username (e.g., dispute12)", required=True)
     amount = TextInput(label="Amount", placeholder="Positive to add, negative to subtract", required=True)
     
     async def on_submit(self, interaction: discord.Interaction):
         # Parse user
-        user_input = self.user_id.value.strip()
-        member = None
-        
-        # Try to parse mention
-        if user_input.startswith('<@') and user_input.endswith('>'):
-            user_id = int(user_input.strip('<@!>'))
-            member = interaction.guild.get_member(user_id)
-        elif user_input.isdigit():
-            member = interaction.guild.get_member(int(user_input))
+        member = parse_user_input(interaction.guild, self.user_id.value)
         
         if not member:
-            await interaction.response.send_message("❌ Invalid user! Please provide a valid user ID or mention.", ephemeral=True)
+            await interaction.response.send_message(f"❌ Invalid user! Could not find user '{self.user_id.value}'. Please use a user ID, mention, or exact username.", ephemeral=True)
             return
         
         # Parse amount
@@ -802,23 +825,16 @@ class ItemManagementView(View):
 
 
 class AddItemModal(Modal, title="➕ Add Item to Player"):
-    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    user_id = TextInput(label="User ID, Mention, or Username", placeholder="Paste user ID, @mention, or username", required=True)
     item_name = TextInput(label="Item Name", placeholder="e.g., Flower Coin, Lucky Charm, Mystery Box", required=True)
     quantity = TextInput(label="Quantity", placeholder="Number of items", required=True, default="1")
     
     async def on_submit(self, interaction: discord.Interaction):
         # Parse user
-        user_input = self.user_id.value.strip()
-        member = None
-        
-        if user_input.startswith('<@') and user_input.endswith('>'):
-            user_id = int(user_input.strip('<@!>'))
-            member = interaction.guild.get_member(user_id)
-        elif user_input.isdigit():
-            member = interaction.guild.get_member(int(user_input))
+        member = parse_user_input(interaction.guild, self.user_id.value)
         
         if not member:
-            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            await interaction.response.send_message(f"❌ Invalid user! Could not find user '{self.user_id.value}'.", ephemeral=True)
             return
         
         # Find item
@@ -849,23 +865,16 @@ class AddItemModal(Modal, title="➕ Add Item to Player"):
 
 
 class RemoveItemModal(Modal, title="➖ Remove Item from Player"):
-    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    user_id = TextInput(label="User ID, Mention, or Username", placeholder="Paste user ID, @mention, or username", required=True)
     item_name = TextInput(label="Item Name", placeholder="e.g., Flower Coin, Lucky Charm, Mystery Box", required=True)
     quantity = TextInput(label="Quantity", placeholder="Number of items to remove", required=True, default="1")
     
     async def on_submit(self, interaction: discord.Interaction):
         # Parse user
-        user_input = self.user_id.value.strip()
-        member = None
-        
-        if user_input.startswith('<@') and user_input.endswith('>'):
-            user_id = int(user_input.strip('<@!>'))
-            member = interaction.guild.get_member(user_id)
-        elif user_input.isdigit():
-            member = interaction.guild.get_member(int(user_input))
+        member = parse_user_input(interaction.guild, self.user_id.value)
         
         if not member:
-            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            await interaction.response.send_message(f"❌ Invalid user! Could not find user '{self.user_id.value}'.", ephemeral=True)
             return
         
         # Find item
@@ -901,21 +910,14 @@ class RemoveItemModal(Modal, title="➖ Remove Item from Player"):
 
 
 class ClearInventoryModal(Modal, title="🗑️ Clear Player Inventory"):
-    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    user_id = TextInput(label="User ID, Mention, or Username", placeholder="Paste user ID, @mention, or username", required=True)
     
     async def on_submit(self, interaction: discord.Interaction):
         # Parse user
-        user_input = self.user_id.value.strip()
-        member = None
-        
-        if user_input.startswith('<@') and user_input.endswith('>'):
-            user_id = int(user_input.strip('<@!>'))
-            member = interaction.guild.get_member(user_id)
-        elif user_input.isdigit():
-            member = interaction.guild.get_member(int(user_input))
+        member = parse_user_input(interaction.guild, self.user_id.value)
         
         if not member:
-            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            await interaction.response.send_message(f"❌ Invalid user! Could not find user '{self.user_id.value}'.", ephemeral=True)
             return
         
         if member.id in player_inventory:
@@ -956,22 +958,15 @@ class PetManagementView(View):
 
 
 class AddPetModal(Modal, title="➕ Add Pet to Player"):
-    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    user_id = TextInput(label="User ID, Mention, or Username", placeholder="Paste user ID, @mention, or username", required=True)
     pet_name = TextInput(label="Pet Name", placeholder="e.g., Garden Cat, Phoenix, Unicorn", required=True)
     
     async def on_submit(self, interaction: discord.Interaction):
         # Parse user
-        user_input = self.user_id.value.strip()
-        member = None
-        
-        if user_input.startswith('<@') and user_input.endswith('>'):
-            user_id = int(user_input.strip('<@!>'))
-            member = interaction.guild.get_member(user_id)
-        elif user_input.isdigit():
-            member = interaction.guild.get_member(int(user_input))
+        member = parse_user_input(interaction.guild, self.user_id.value)
         
         if not member:
-            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            await interaction.response.send_message(f"❌ Invalid user! Could not find user '{self.user_id.value}'.", ephemeral=True)
             return
         
         # Find pet
@@ -1007,22 +1002,15 @@ class AddPetModal(Modal, title="➕ Add Pet to Player"):
 
 
 class RemovePetModal(Modal, title="➖ Remove Pet from Player"):
-    user_id = TextInput(label="User ID or Mention", placeholder="Paste user ID or @mention the user", required=True)
+    user_id = TextInput(label="User ID, Mention, or Username", placeholder="Paste user ID, @mention, or username", required=True)
     pet_name = TextInput(label="Pet Name", placeholder="e.g., Garden Cat, Phoenix, Unicorn", required=True)
     
     async def on_submit(self, interaction: discord.Interaction):
         # Parse user
-        user_input = self.user_id.value.strip()
-        member = None
-        
-        if user_input.startswith('<@') and user_input.endswith('>'):
-            user_id = int(user_input.strip('<@!>'))
-            member = interaction.guild.get_member(user_id)
-        elif user_input.isdigit():
-            member = interaction.guild.get_member(int(user_input))
+        member = parse_user_input(interaction.guild, self.user_id.value)
         
         if not member:
-            await interaction.response.send_message("❌ Invalid user!", ephemeral=True)
+            await interaction.response.send_message(f"❌ Invalid user! Could not find user '{self.user_id.value}'.", ephemeral=True)
             return
         
         # Find pet
@@ -3543,4 +3531,4 @@ async def on_ready():
 
 # Run the bot
 keep_alive()
-bot.run(TOKEN) 
+bot.run(TOKEN)
