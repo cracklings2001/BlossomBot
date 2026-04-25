@@ -658,7 +658,6 @@ class ShopView(View):
         if interaction.user != self.ctx.author:
             await interaction.response.send_message("❌ Not your inventory!", ephemeral=True)
             return
-        # Trigger inventory command
         await self.ctx.invoke(bot.get_command('inventory'), member=self.ctx.author)
     
     async def close_shop(self, interaction: discord.Interaction):
@@ -877,7 +876,7 @@ class ConfirmPetView(View):
         await interaction.response.edit_message(content="Adoption cancelled!", embed=None, view=None)
         self.stop()
 
-# --- INVENTORY WITH BUTTONS (NEW) ---
+# --- INVENTORY WITH BUTTONS ---
 class InventoryView(View):
     def __init__(self, ctx, target, page=0):
         super().__init__(timeout=120)
@@ -908,7 +907,6 @@ class InventoryView(View):
             btn.callback = self.create_use_callback(item_id, item_data)
             self.add_item(btn)
         
-        # Navigation buttons
         if self.page > 0:
             prev_btn = Button(label="◀️ Previous", style=discord.ButtonStyle.secondary)
             prev_btn.callback = self.previous_page
@@ -923,7 +921,6 @@ class InventoryView(View):
             next_btn.callback = self.next_page
             self.add_item(next_btn)
         
-        # Bottom buttons
         close_btn = Button(label="❌ Close", style=discord.ButtonStyle.danger, emoji="❌", row=2)
         close_btn.callback = self.close_inventory
         self.add_item(close_btn)
@@ -949,7 +946,6 @@ class InventoryView(View):
                 color=0xffa500
             )
             
-            # Show effect based on item type
             if item_id == "lucky_charm":
                 embed.add_field(name="✨ Effect", value="+5% better luck in games for 24 hours", inline=False)
             elif item_id == "xp_boost":
@@ -1081,7 +1077,6 @@ class ConfirmUseView(View):
             await self.parent_view.refresh_inventory(interaction)
             return
         
-        # Process the item use
         if self.item_id == "mystery_box":
             reward = random.choice([500, 1000, 2500, 5000, 10000, 25000])
             update_balance(self.ctx.author.id, reward)
@@ -1163,7 +1158,6 @@ class ConfirmUseView(View):
             await interaction.response.edit_message(embed=embed, view=None)
         
         else:
-            # Collectible items
             remove_from_inventory(self.ctx.author.id, self.item_id)
             embed = discord.Embed(
                 title=f"{self.item_data['emoji']} Item Used!",
@@ -1174,8 +1168,6 @@ class ConfirmUseView(View):
             await interaction.response.edit_message(embed=embed, view=None)
         
         save_all_data()
-        
-        # Refresh the inventory view after using item
         await self.parent_view.refresh_inventory(interaction)
         self.stop()
     
@@ -2120,7 +2112,8 @@ async def scratch(ctx, bet: int):
 async def treasure(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
         await ctx.send("❌ Invalid bet or insufficient balance!")
-        return    embed = discord.Embed(title="💎 Treasure Hunt", description=f"Bet: {bet} petals\nFind the treasure in 2 attempts!", color=0xffa500)
+        return
+    embed = discord.Embed(title="💎 Treasure Hunt", description=f"Bet: {bet} petals\nFind the treasure in 2 attempts!", color=0xffa500)
     await ctx.send(embed=embed, view=TreasureHuntView(ctx, bet))
 
 @bot.command()
@@ -2196,8 +2189,8 @@ async def blackjack(ctx, bet: int):
         result = "Push! Bet returned!"
         color = 0xffa500
     
-    embed = discord.Embed(title="🃏 Blackjack Result", description=f"Your hand: {player} = {psum}\nDealer hand: {dealer} = {dsum}\n\n{result}", color=color)
-    await ctx.send(embed=embed)
+    final_embed = discord.Embed(title="🃏 Blackjack Result", description=f"Your hand: {player} = {psum}\nDealer hand: {dealer} = {dsum}\n\n{result}", color=color)
+    await ctx.send(embed=final_embed)
 
 @bot.command()
 async def rps(ctx, choice: str, bet: int):
@@ -2266,7 +2259,6 @@ async def inventory(ctx, member: discord.Member = None):
 @bot.command()
 async def use(ctx, *, item: str):
     """Use an item from your inventory (or use buttons in inventory)"""
-    # This is kept as backup, but inventory buttons are recommended
     item_id = None
     for key, value in shop_items.items():
         if value['name'].lower() == item.lower():
@@ -2283,7 +2275,6 @@ async def use(ctx, *, item: str):
         await ctx.send(f"Type `b!shop` to buy items or `b!inventory` to see what you own.")
         return
     
-    # Process the item use (same as in ConfirmUseView)
     if item_id == "mystery_box":
         reward = random.choice([500, 1000, 2500, 5000, 10000, 25000])
         update_balance(ctx.author.id, reward)
@@ -2349,35 +2340,31 @@ async def buffs(ctx):
     embed = discord.Embed(title="✨ Active Buffs", color=0xff69b4)
     has_buffs = False
     
-    # Check for luck charm
-    if ctx.author.id in player_buffs and player_buffs[ctx.author.id].get('luck'):
-        expiry = player_buffs[ctx.author.id].get('luck_expiry')
-        if expiry and expiry > datetime.now():
+    if ctx.author.id in player_buffs:
+        if player_buffs[ctx.author.id].get('luck'):
+            expiry = player_buffs[ctx.author.id].get('luck_expiry')
+            if expiry and expiry > datetime.now():
+                has_buffs = True
+                embed.add_field(name="🍀 Lucky Charm", value=f"+5% luck\nExpires: <t:{int(expiry.timestamp())}:R>", inline=False)
+            else:
+                player_buffs[ctx.author.id]['luck'] = False
+        
+        if player_buffs[ctx.author.id].get('xp_boost'):
+            expiry = player_buffs[ctx.author.id].get('xp_boost_expiry')
+            if expiry and expiry > datetime.now():
+                has_buffs = True
+                embed.add_field(name="⚡ XP Boost", value=f"Double daily rewards\nExpires: <t:{int(expiry.timestamp())}:R>", inline=False)
+            else:
+                player_buffs[ctx.author.id]['xp_boost'] = False
+        
+        if player_buffs[ctx.author.id].get('protection', 0) > 0:
             has_buffs = True
-            embed.add_field(name="🍀 Lucky Charm", value=f"+5% luck\nExpires: <t:{int(expiry.timestamp())}:R>", inline=False)
-        else:
-            player_buffs[ctx.author.id]['luck'] = False
-    
-    # Check for XP boost
-    if ctx.author.id in player_buffs and player_buffs[ctx.author.id].get('xp_boost'):
-        expiry = player_buffs[ctx.author.id].get('xp_boost_expiry')
-        if expiry and expiry > datetime.now():
+            embed.add_field(name="🛡️ Protection Amulet", value=f"{player_buffs[ctx.author.id]['protection']} remaining", inline=False)
+        
+        if player_buffs[ctx.author.id].get('double_win', 0) > 0:
             has_buffs = True
-            embed.add_field(name="⚡ XP Boost", value=f"Double daily rewards\nExpires: <t:{int(expiry.timestamp())}:R>", inline=False)
-        else:
-            player_buffs[ctx.author.id]['xp_boost'] = False
+            embed.add_field(name="🎰 Double Win Token", value=f"{player_buffs[ctx.author.id]['double_win']} remaining", inline=False)
     
-    # Check for protection amulets
-    if ctx.author.id in player_buffs and player_buffs[ctx.author.id].get('protection', 0) > 0:
-        has_buffs = True
-        embed.add_field(name="🛡️ Protection Amulet", value=f"{player_buffs[ctx.author.id]['protection']} remaining", inline=False)
-    
-    # Check for double win tokens
-    if ctx.author.id in player_buffs and player_buffs[ctx.author.id].get('double_win', 0) > 0:
-        has_buffs = True
-        embed.add_field(name="🎰 Double Win Token", value=f"{player_buffs[ctx.author.id]['double_win']} remaining", inline=False)
-    
-    # Check for bank vault
     if ctx.author.id in player_permanents and player_permanents[ctx.author.id].get('bank_vault'):
         has_buffs = True
         embed.add_field(name="🏦 Bank Vault", value="Daily gift limit: 1,500,000 petals", inline=False)
@@ -2403,10 +2390,12 @@ async def gift(ctx, member: discord.Member, amount: int):
     uid = ctx.author.id
     today = datetime.now().date()
     
+    limit = 1500000 if uid in player_permanents and player_permanents[uid].get('bank_vault') else DAILY_GIFT_LIMIT
+    
     if uid in gift_cooldown:
         last, gifted = gift_cooldown[uid]
-        if last == today and gifted + amount > DAILY_GIFT_LIMIT:
-            remaining = DAILY_GIFT_LIMIT - gifted
+        if last == today and gifted + amount > limit:
+            remaining = limit - gifted
             await ctx.send(f"❌ Daily gift limit reached! You can gift {remaining} more petals today!")
             return
         elif last == today:
@@ -2416,8 +2405,6 @@ async def gift(ctx, member: discord.Member, amount: int):
     else:
         new_total = amount
     
-    # Check if user has bank vault for increased limit
-    limit = 1500000 if uid in player_permanents and player_permanents[uid].get('bank_vault') else DAILY_GIFT_LIMIT
     if new_total > limit:
         remaining = limit - (new_total - amount)
         await ctx.send(f"❌ Daily gift limit reached! You can gift {remaining} more petals today!")
@@ -2481,7 +2468,7 @@ async def pet(ctx, action: str = None, *, name: str = None):
         pet_data = pet_shop_items[pet_id]
         happiness = "❤️" * (pet["happiness"] // 10) + "🖤" * (10 - (pet["happiness"] // 10))
         xp_needed = pet_data['xp_per_level'] * pet['level']
-        xp_bar = "🟢" * int((pet["xp"] / xp_needed) * 10) + "⚫" * (10 - int((pet["xp"] / xp_needed) * 10)) if xp_needed > 0 else "🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢"
+        xp_bar = "🟢" * int((pet["xp"] / xp_needed) * 10) + "⚫" * (10 - int((pet["xp"] / xp_needed) * 10)) if xp_needed > 0 else "🟢" * 10
         
         embed = discord.Embed(title=f"🐾 {pet_data['emoji']} {pet.get('name', pet_data['name'])}", color=0xff69b4)
         embed.add_field(name="Stats", value=f"**Level:** {pet['level']}/{pet_data['max_level']}\n**XP:** {pet['xp']:,}/{xp_needed:,}\n{xp_bar}\n**Happiness:** {happiness} {pet['happiness']}%\n**Daily Reward:** {pet_data['daily_reward'] + int(pet_data['daily_reward'] * (pet['level'] / 100)) + int(pet_data['daily_reward'] * (pet['happiness'] / 200)):,} petals", inline=False)
