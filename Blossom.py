@@ -2935,7 +2935,7 @@ async def color(ctx, bet: int):
 
 
 @bot.command()
-async def higherlower(ctx, bet: int):
+async def higherlowererstestest(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
         await ctx.send("❌ Invalid bet or insufficient balance!")
         return
