@@ -118,20 +118,6 @@ shop_items = {
         "description": "Doubles daily rewards for 24 hours",
         "type": "buff"
     },
-    "protection_amulet": {
-        "name": "N/A",
-        "emoji": "N/A",
-        "price": 999999999999999999999999999999,
-        "description": "N/A",
-        "type": "N/A"
-    },
-    "double_win": {
-        "name": "N/A",
-        "emoji": "N/A",
-        "price": 999999999999999999999999999999,
-        "description": "Doubles your next win in any game!",
-        "type": "consumable"
-    },
     "bank_vault": {
         "name": "🏦 Bank Vault",
         "emoji": "🏦",
@@ -575,22 +561,11 @@ def format_time(seconds):
 
 # --- BUFF HANDLING FUNCTIONS ---
 def apply_win_buffs(user_id, win_amount):
-    if user_id in player_buffs and player_buffs[user_id].get('double_win', 0) > 0:
-        win_amount = win_amount * 2
-        player_buffs[user_id]['double_win'] -= 1
-        if player_buffs[user_id]['double_win'] <= 0:
-            del player_buffs[user_id]['double_win']
-        save_all_data()
-        return win_amount, True
+    # No double win token anymore
     return win_amount, False
 
 def apply_loss_protection(user_id, loss_amount):
-    if user_id in player_buffs and player_buffs[user_id].get('protection', 0) > 0:
-        player_buffs[user_id]['protection'] -= 1
-        if player_buffs[user_id]['protection'] <= 0:
-            del player_buffs[user_id]['protection']
-        save_all_data()
-        return 0, True
+    # No protection amulet anymore
     return loss_amount, False
 
 def get_daily_multiplier(user_id):
@@ -1142,10 +1117,6 @@ class PlayerSelectMenu(Select):
                     buff_text += "🍀 Lucky Charm\n"
                 if buffs.get('xp_boost'):
                     buff_text += "⚡ XP Boost\n"
-                if buffs.get('protection', 0) > 0:
-                    buff_text += f"🛡️ Protection: {buffs['protection']}x\n"
-                if buffs.get('double_win', 0) > 0:
-                    buff_text += f"🎰 Double Win: {buffs['double_win']}x\n"
             
             if not buff_text:
                 buff_text = "No active buffs"
@@ -1608,10 +1579,6 @@ class InventoryView(View):
                 embed.add_field(name="✨ Effect", value="+5% better luck in games for 24 hours", inline=False)
             elif item_id == "xp_boost":
                 embed.add_field(name="✨ Effect", value="Doubles daily rewards for 24 hours", inline=False)
-            elif item_id == "protection_amulet":
-                embed.add_field(name="✨ Effect", value="Protects you from 1 loss in any game", inline=False)
-            elif item_id == "double_win":
-                embed.add_field(name="✨ Effect", value="Doubles your next win in any game", inline=False)
             elif item_id == "bank_vault":
                 embed.add_field(name="✨ Effect", value="Permanently increases daily gift limit to 1,500,000", inline=False)
             elif item_id == "mystery_box":
@@ -1696,10 +1663,6 @@ class InventoryView(View):
                 effect_text = "🍀 +5% luck (24h)"
             elif item_id == "xp_boost":
                 effect_text = "⚡ Double daily rewards (24h)"
-            elif item_id == "protection_amulet":
-                effect_text = "🛡️ Protects from 1 loss"
-            elif item_id == "double_win":
-                effect_text = "🎰 Doubles next win"
             elif item_id == "bank_vault":
                 effect_text = "🏦 +500k gift limit (permanent)"
             elif item_id == "mystery_box":
@@ -1778,32 +1741,6 @@ class ConfirmUseView(View):
             embed.add_field(name="Expires", value=f"<t:{int(expiry.timestamp())}:R>", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
         
-        elif self.item_id == "protection_amulet":
-            if self.ctx.author.id not in player_buffs:
-                player_buffs[self.ctx.author.id] = {}
-            player_buffs[self.ctx.author.id]['protection'] = player_buffs[self.ctx.author.id].get('protection', 0) + 1
-            remove_from_inventory(self.ctx.author.id, self.item_id)
-            total = player_buffs[self.ctx.author.id]['protection']
-            embed = discord.Embed(
-                title="🛡️ Protection Amulet Activated! 🛡️",
-                description=f"You used a Protection Amulet!\nYou are protected from your next **{total}** loss(es)!",
-                color=0x00ff00
-            )
-            await interaction.response.edit_message(embed=embed, view=None)
-        
-        elif self.item_id == "double_win":
-            if self.ctx.author.id not in player_buffs:
-                player_buffs[self.ctx.author.id] = {}
-            player_buffs[self.ctx.author.id]['double_win'] = player_buffs[self.ctx.author.id].get('double_win', 0) + 1
-            remove_from_inventory(self.ctx.author.id, self.item_id)
-            total = player_buffs[self.ctx.author.id]['double_win']
-            embed = discord.Embed(
-                title="🎰 Double Win Token Activated! 🎰",
-                description=f"You used a Double Win Token!\nYour next **{total}** win(s) will be **DOUBLED**!",
-                color=0x00ff00
-            )
-            await interaction.response.edit_message(embed=embed, view=None)
-        
         elif self.item_id == "bank_vault":
             if self.ctx.author.id not in player_permanents:
                 player_permanents[self.ctx.author.id] = {}
@@ -1864,12 +1801,10 @@ class CrashView(View):
         
         self.cashed_out = True
         win_amount = int(self.bet * self.multiplier)
-        final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+        final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
         update_balance(self.ctx.author.id, final_win - self.bet)
         
         embed = discord.Embed(title="✈️ Cash Out!", description=f"You cashed out at {self.multiplier:.2f}x!", color=0x00ff00)
-        if buff_used:
-            embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
         embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
@@ -1887,13 +1822,10 @@ class CrashView(View):
             if random.random() < 0.1 or self.multiplier >= self.crash_point:
                 self.crashed = True
                 loss_amount = self.bet
-                actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+                actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
                 update_balance(self.ctx.author.id, -actual_loss)
                 embed = discord.Embed(title="💥 CRASH!", description=f"The plane crashed at {self.multiplier:.2f}x!", color=0xff0000)
-                if buff_used:
-                    embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-                else:
-                    embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
                 embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
                 await self.message.edit(embed=embed, view=None)
                 self.stop()
@@ -1925,21 +1857,16 @@ class CoinflipView(View):
         result = random.choice(["heads", "tails"])
         if choice == result:
             win_amount = int(self.bet * 0.9)
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
             update_balance(self.ctx.author.id, final_win)
             embed = discord.Embed(title="🪙 Coinflip", description=f"You chose {choice.upper()}, result was {result.upper()}!", color=0x00ff00)
-            if buff_used:
-                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
             embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             embed = discord.Embed(title="🪙 Coinflip", description=f"You chose {choice.upper()}, result was {result.upper()}!", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
         
         embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
@@ -1964,21 +1891,16 @@ class DiceDuelView(View):
         
         if player > bot:
             win_amount = int(self.bet * 1.8)
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
             update_balance(self.ctx.author.id, final_win - self.bet)
             embed = discord.Embed(title="🎲 Dice Duel", description=f"Your roll: {dice[player]} {player}\nBot roll: {dice[bot]} {bot}", color=0x00ff00)
-            if buff_used:
-                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
             embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             embed = discord.Embed(title="🎲 Dice Duel", description=f"Your roll: {dice[player]} {player}\nBot roll: {dice[bot]} {bot}", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
         
         embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
@@ -2003,19 +1925,19 @@ class SlotMachineView(View):
         if reels[0] == reels[1] == reels[2]:
             mult = {"7️⃣":6, "💎":5, "⭐":4, "🌸":3}.get(reels[0], 2)
             win_amount = self.bet * mult
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
             update_balance(self.ctx.author.id, final_win - self.bet)
             result = f"JACKPOT! Won {final_win} petals!"
             color = 0x00ff00
         elif reels[0] == reels[1] or reels[1] == reels[2] or reels[0] == reels[2]:
             win_amount = int(self.bet * 1.5)
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
             update_balance(self.ctx.author.id, final_win - self.bet)
             result = f"MATCH! Won {final_win} petals!"
             color = 0xffa500
         else:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             result = f"No match! Lost {actual_loss} petals!"
             color = 0xff0000
@@ -2062,21 +1984,16 @@ class RouletteView(View):
         
         if choice == result:
             win_amount = self.bet * (mult if result == "green" else 1.8)
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, int(win_amount))
+            final_win, _ = apply_win_buffs(self.ctx.author.id, int(win_amount))
             update_balance(self.ctx.author.id, final_win - self.bet)
             embed = discord.Embed(title="🎡 Roulette", description=f"Ball landed on {num} ({result.upper()})", color=0x00ff00)
-            if buff_used:
-                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {int(win_amount)} → {final_win} petals!", inline=False)
             embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             embed = discord.Embed(title="🎡 Roulette", description=f"Ball landed on {num} ({result.upper()})", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
         
         embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
@@ -2097,7 +2014,7 @@ class MinesButton(Button):
         if self.num in view.bombs:
             view.stop()
             loss_amount = view.bet
-            actual_loss, buff_used = apply_loss_protection(view.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(view.ctx.author.id, loss_amount)
             update_balance(view.ctx.author.id, -actual_loss)
             for c in view.children:
                 if hasattr(c, 'num') and c.num in view.bombs:
@@ -2108,10 +2025,7 @@ class MinesButton(Button):
                     c.disabled = True
             
             embed = discord.Embed(title="💥 BOOM!", description=f"You stepped on a bomb!", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
             embed.add_field(name="New Balance", value=f"{get_balance(view.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=view)
         else:
@@ -2124,13 +2038,11 @@ class MinesButton(Button):
             async def co(i):
                 view.stop()
                 win_amount = val
-                final_win, buff_used = apply_win_buffs(view.ctx.author.id, win_amount)
+                final_win, _ = apply_win_buffs(view.ctx.author.id, win_amount)
                 update_balance(view.ctx.author.id, final_win - view.bet)
                 for c in view.children:
                     c.disabled = True
                 embed = discord.Embed(title="💰 Cashout!", description=f"You cashed out with {view.revealed} safe tiles!", color=0x00ff00)
-                if buff_used:
-                    embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
                 embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
                 embed.add_field(name="New Balance", value=f"{get_balance(view.ctx.author.id):,} petals", inline=False)
                 await i.response.edit_message(embed=embed, view=view)
@@ -2179,21 +2091,16 @@ class ColorButton(Button):
         
         if hits > 0:
             win_amount = view.bet * hits
-            final_win, buff_used = apply_win_buffs(view.ctx.author.id, win_amount)
+            final_win, _ = apply_win_buffs(view.ctx.author.id, win_amount)
             update_balance(view.ctx.author.id, final_win - view.bet)
             embed = discord.Embed(title="🎉 Victory!", description=f"Result: {result_display}\nGuessed {self.color_name} - appeared {hits} times!", color=0x00ff00)
-            if buff_used:
-                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
             embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
             loss_amount = view.bet
-            actual_loss, buff_used = apply_loss_protection(view.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(view.ctx.author.id, loss_amount)
             update_balance(view.ctx.author.id, -actual_loss)
             embed = discord.Embed(title="💔 Defeat", description=f"Result: {result_display}\nGuessed {self.color_name} - didn't appear!", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
         
         embed.add_field(name="New Balance", value=f"{get_balance(view.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=view)
@@ -2258,25 +2165,24 @@ class HigherLowerView(View):
         current_card_visual = f"{self.card_emoji} **{self.card_display}**"
         next_card_visual = f"{next_emoji} **{next_display}**"
         
-        if (choice == "higher" and next_card > self.current_card) or (choice == "lower" and next_card < self.current_card):
-            win_amount = int(self.bet * 1.8)
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+        # Made harder to win - only win if next card is 3+ higher or lower
+        if (choice == "higher" and next_card >= self.current_card + 3) or (choice == "lower" and next_card <= self.current_card - 3):
+            win_amount = int(self.bet * 2.5)
+            final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
             update_balance(self.ctx.author.id, final_win - self.bet)
             embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}", color=0x00ff00)
-            if buff_used:
-                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
             embed.add_field(name="Result", value=f"{choice.upper()} was correct! You won {final_win} petals!", inline=False)
+        elif (choice == "higher" and next_card > self.current_card and next_card < self.current_card + 3) or (choice == "lower" and next_card < self.current_card and next_card > self.current_card - 3):
+            # Close but not enough - tie (return bet)
+            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}\n\nClose! Bet returned!", color=0xffa500)
         elif next_card == self.current_card:
-            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}\n\nTie! Bet returned!", color=0xffa500)
+            embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}\n\nSame card! Bet returned!", color=0xffa500)
         else:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             embed = discord.Embed(title="🎴 Higher/Lower", description=f"Your card: {current_card_visual}\nNext card: {next_card_visual}", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"{choice.upper()} was wrong! You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"{choice.upper()} was wrong! You lost {actual_loss} petals!", inline=False)
         
         embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         self.game_active = False
@@ -2304,13 +2210,10 @@ class TowerView(View):
         
         if random.random() < 0.4:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             embed = discord.Embed(title="🏰 Tower Climb", description=f"You fell from floor {self.floor}!", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
             embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
@@ -2328,11 +2231,9 @@ class TowerView(View):
             return
         
         win_amount = int(self.bet * self.multiplier)
-        final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+        final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
         update_balance(self.ctx.author.id, final_win - self.bet)
         embed = discord.Embed(title="🏰 Tower Climb", description=f"You cashed out at floor {self.floor}!", color=0x00ff00)
-        if buff_used:
-            embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
         embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
@@ -2374,29 +2275,22 @@ class ScratchView(View):
         if all(self.revealed):
             if self.values[0] == self.values[1] == self.values[2]:
                 win_amount = self.bet * 3
-                final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+                final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
                 update_balance(self.ctx.author.id, final_win - self.bet)
                 embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}", color=0x00ff00)
-                if buff_used:
-                    embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
                 embed.add_field(name="Result", value=f"JACKPOT! You won {final_win} petals!", inline=False)
             elif self.values[0] == self.values[1] or self.values[1] == self.values[2] or self.values[0] == self.values[2]:
                 win_amount = int(self.bet * 1.5)
-                final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+                final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
                 update_balance(self.ctx.author.id, final_win - self.bet)
                 embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}", color=0xffa500)
-                if buff_used:
-                    embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
                 embed.add_field(name="Result", value=f"MATCH! You won {final_win} petals!", inline=False)
             else:
                 loss_amount = self.bet
-                actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+                actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
                 update_balance(self.ctx.author.id, -actual_loss)
                 embed = discord.Embed(title="🎫 Scratch Card", description=f"{self.values[0]} | {self.values[1]} | {self.values[2]}", color=0xff0000)
-                if buff_used:
-                    embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-                else:
-                    embed.add_field(name="Result", value=f"No match! You lost {actual_loss} petals!", inline=False)
+                embed.add_field(name="Result", value=f"No match! You lost {actual_loss} petals!", inline=False)
             embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
@@ -2449,24 +2343,19 @@ class TreasureHuntView(View):
         self.attempts += 1
         if spot == self.treasure_position:
             win_amount = int(self.bet * 2.5)
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
             update_balance(self.ctx.author.id, final_win - self.bet)
             embed = discord.Embed(title="💎 Treasure Hunt", description=f"You found the treasure at spot {spot}!", color=0x00ff00)
-            if buff_used:
-                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
             embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
             embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
         elif self.attempts >= self.max_attempts:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             embed = discord.Embed(title="💎 Treasure Hunt", description=f"You didn't find the treasure! It was at spot {self.treasure_position}.", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
             embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
@@ -2500,13 +2389,10 @@ class RussianRouletteView(View):
         
         if self.chambers[self.current_chamber]:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             embed = discord.Embed(title="💀 RUSSIAN ROULETTE", description=f"BANG! Chamber {self.current_chamber + 1} had a bullet!", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
             embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
             self.stop()
@@ -2517,11 +2403,9 @@ class RussianRouletteView(View):
         
         if self.spins >= self.max_spins:
             win_amount = self.bet * 3
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
             update_balance(self.ctx.author.id, final_win - self.bet)
             embed = discord.Embed(title="🔫 RUSSIAN ROULETTE", description=f"You survived {self.max_spins} pulls!", color=0x00ff00)
-            if buff_used:
-                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
             embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
             embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
             await interaction.response.edit_message(embed=embed, view=None)
@@ -2589,21 +2473,16 @@ class RaceView(View):
         winner = random.randint(0, 4)
         if choice == winner:
             win_amount = int(self.bet * 3.5)
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
             update_balance(self.ctx.author.id, final_win - self.bet)
             embed = discord.Embed(title="🏇 Horse Racing", description=f"Winner: {self.horses[winner]}\nYour bet: {self.horses[choice]}", color=0x00ff00)
-            if buff_used:
-                embed.add_field(name="🎰 DOUBLE WIN TOKEN ACTIVATED!", value=f"Your win was doubled! {win_amount} → {final_win} petals!", inline=False)
             embed.add_field(name="Result", value=f"You won {final_win} petals!", inline=False)
         else:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             embed = discord.Embed(title="🏇 Horse Racing", description=f"Winner: {self.horses[winner]}\nYour bet: {self.horses[choice]}", color=0xff0000)
-            if buff_used:
-                embed.add_field(name="🛡️ PROTECTION AMULET ACTIVATED!", value=f"You lost {loss_amount} petals but were protected! No deduction!", inline=False)
-            else:
-                embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
+            embed.add_field(name="Result", value=f"You lost {actual_loss} petals!", inline=False)
         
         embed.add_field(name="New Balance", value=f"{get_balance(self.ctx.author.id):,} petals", inline=False)
         await interaction.response.edit_message(embed=embed, view=None)
@@ -2636,13 +2515,13 @@ class PokerView(View):
         
         if player_score > bot_score:
             win_amount = int(self.bet * 1.8)
-            final_win, buff_used = apply_win_buffs(self.ctx.author.id, win_amount)
+            final_win, _ = apply_win_buffs(self.ctx.author.id, win_amount)
             update_balance(self.ctx.author.id, final_win - self.bet)
             result = f"You won {final_win} petals!"
             color = 0x00ff00
         else:
             loss_amount = self.bet
-            actual_loss, buff_used = apply_loss_protection(self.ctx.author.id, loss_amount)
+            actual_loss, _ = apply_loss_protection(self.ctx.author.id, loss_amount)
             update_balance(self.ctx.author.id, -actual_loss)
             result = f"You lost {actual_loss} petals!"
             color = 0xff0000
@@ -2935,7 +2814,7 @@ async def color(ctx, bet: int):
 
 
 @bot.command()
-async def higherlowererstestest(ctx, bet: int):
+async def higherlower(ctx, bet: int):
     if bet <= 0 or get_balance(ctx.author.id) < bet:
         await ctx.send("❌ Invalid bet or insufficient balance!")
         return
@@ -2951,7 +2830,7 @@ async def higherlowererstestest(ctx, bet: int):
     }
     current_emoji = card_emojis.get(current_card, "🎴")
     
-    embed = discord.Embed(title="🎴 Higher or Lower", description=f"Your card: {current_emoji} {current_display}\nBet: {bet} petals\n\nWill the next card be HIGHER or LOWER?", color=0xffa500)
+    embed = discord.Embed(title="🎴 Higher or Lower", description=f"Your card: {current_emoji} {current_display}\nBet: {bet} petals\n\nWill the next card be HIGHER or LOWER?\n⚠️ Must be 3+ higher/lower to win!", color=0xffa500)
     await ctx.send(embed=embed, view=HigherLowerView(ctx, bet, current_card, current_display, current_emoji))
 
 
@@ -3043,21 +2922,15 @@ async def blackjack(ctx, bet: int):
     
     if psum > 21 or (dsum <= 21 and psum < dsum):
         loss_amount = bet
-        actual_loss, buff_used = apply_loss_protection(ctx.author.id, loss_amount)
+        actual_loss, _ = apply_loss_protection(ctx.author.id, loss_amount)
         update_balance(ctx.author.id, -actual_loss)
-        if buff_used:
-            result = f"You lost {loss_amount} petals but were protected!"
-        else:
-            result = f"You lost {actual_loss} petals!"
+        result = f"You lost {actual_loss} petals!"
         color = 0xff0000
     elif dsum > 21 or psum > dsum:
         win_amount = int(bet * 0.95)
-        final_win, buff_used = apply_win_buffs(ctx.author.id, win_amount)
+        final_win, _ = apply_win_buffs(ctx.author.id, win_amount)
         update_balance(ctx.author.id, final_win)
-        if buff_used:
-            result = f"DOUBLE WIN! You won {final_win} petals! (Doubled from {win_amount})"
-        else:
-            result = f"You won {final_win} petals!"
+        result = f"You won {final_win} petals!"
         color = 0x00ff00
     else:
         result = "Push! Bet returned!"
@@ -3084,30 +2957,21 @@ async def rps(ctx, choice: str, bet: int):
     
     if choice.lower() == bot_choice:
         loss_amount = bet
-        actual_loss, buff_used = apply_loss_protection(ctx.author.id, loss_amount)
+        actual_loss, _ = apply_loss_protection(ctx.author.id, loss_amount)
         update_balance(ctx.author.id, -actual_loss)
-        if buff_used:
-            result = f"Tie goes to house! You lost {loss_amount} petals but were protected!"
-        else:
-            result = f"Tie goes to house! You lost {actual_loss} petals!"
+        result = f"Tie goes to house! You lost {actual_loss} petals!"
         color = 0xff0000
     elif (choice.lower() == "rock" and bot_choice == "scissors") or (choice.lower() == "paper" and bot_choice == "rock") or (choice.lower() == "scissors" and bot_choice == "paper"):
         win_amount = int(bet * 0.9)
-        final_win, buff_used = apply_win_buffs(ctx.author.id, win_amount)
+        final_win, _ = apply_win_buffs(ctx.author.id, win_amount)
         update_balance(ctx.author.id, final_win)
-        if buff_used:
-            result = f"DOUBLE WIN! You win {final_win} petals! (Doubled from {win_amount})"
-        else:
-            result = f"You win {final_win} petals!"
+        result = f"You win {final_win} petals!"
         color = 0x00ff00
     else:
         loss_amount = bet
-        actual_loss, buff_used = apply_loss_protection(ctx.author.id, loss_amount)
+        actual_loss, _ = apply_loss_protection(ctx.author.id, loss_amount)
         update_balance(ctx.author.id, -actual_loss)
-        if buff_used:
-            result = f"You lost {loss_amount} petals but were protected!"
-        else:
-            result = f"You lose {actual_loss} petals!"
+        result = f"You lose {actual_loss} petals!"
         color = 0xff0000
     
     embed = discord.Embed(title="✂️ Rock Paper Scissors", description=f"You: {emojis[choice.lower()]} {choice}\nBot: {emojis[bot_choice]} {bot_choice}\n\n{result}", color=color)
@@ -3171,14 +3035,6 @@ async def buffs(ctx):
                 embed.add_field(name="⚡ XP Boost", value=f"Double daily rewards\nExpires: <t:{int(expiry.timestamp())}:R>", inline=False)
             else:
                 player_buffs[ctx.author.id]['xp_boost'] = False
-        
-        if player_buffs[ctx.author.id].get('protection', 0) > 0:
-            has_buffs = True
-            embed.add_field(name="🛡️ Protection Amulet", value=f"{player_buffs[ctx.author.id]['protection']} remaining", inline=False)
-        
-        if player_buffs[ctx.author.id].get('double_win', 0) > 0:
-            has_buffs = True
-            embed.add_field(name="🎰 Double Win Token", value=f"{player_buffs[ctx.author.id]['double_win']} remaining", inline=False)
     
     if ctx.author.id in player_permanents and player_permanents[ctx.author.id].get('bank_vault'):
         has_buffs = True
