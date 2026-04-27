@@ -128,7 +128,7 @@ shop_items = {
     "double_win": {
         "name": "🎰 Double Win Token",
         "emoji": "🎰",
-        "price": 50000,
+        "price": 500000000000000,
         "description": "Doubles your next win in any game!",
         "type": "consumable"
     },
